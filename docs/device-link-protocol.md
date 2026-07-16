@@ -1,0 +1,121 @@
+# device-link-protocol — 设备互联中继层协议
+
+> 包:`@cindy/device-link-protocol` · 协议版本 `PROTOCOL_VERSION = 1` · 传输:WebSocket(JSON 帧)
+> 三方角色:**controller**(控制端,手机或另一台桌面)、**target**(被控端桌面)、**relay**(device-link server,哑中继)。
+
+## 1. 协议模型:哑中继(dumb relay)
+
+同账号的多台设备各自与 relay 保持一条 WS 长连接。控制端对被控端的一切操作(远程 IPC invoke、事件推送)都封装成统一信封,由 relay 按 `dst` 转发:
+
+```mermaid
+flowchart LR
+    C["controller<br/>(手机 / 另一台桌面)"] -->|"invoke / link-open"| R["relay<br/>(哑中继, 只看路由头)"]
+    R -->|"按 dst 转发"| T["target<br/>(被控端桌面)"]
+    T -->|"invoke-result / push"| R
+    R -->|"按 dst 转发"| C
+```
+
+**relay 是哑的**:只解析信封的路由头(`v / kind / id / src / dst`)与连接层 payload;隧道层 payload(invoke 的 channel/args、push 的事件内容)对 relay **完全不透明**——它不理解、不校验、不记录语义。这个设计决定了本包的准入边界(§2)。
+
+## 2. 准入边界(本包装什么、不装什么)
+
+本包是中继层协议的**单一权威来源**,只包含 relay 需要解析/校验的部分:
+
+**包含**:信封与 kind 集合、路由语义(`ROUTED_KINDS` / `CONTROL_KINDS`)、协议常量、relay 错误码、连接层 payload(hello / hello-ack / presence 系列)。
+
+**不包含**(留在客户端仓的完整 device-link 包中):
+
+- 隧道层 payload 类型:`LinkOpenPayload` / `LinkAcceptPayload` / `LinkClosePayload` / `InvokePayload` / `InvokeResultPayload` / `PushPayload`——controller ↔ target 端到端,对 relay 不透明;
+- `DeviceLinkError` 异常类与客户端本地错误码(`CHANNEL_NOT_ALLOWED` / `INVOKE_TIMEOUT` / `NOT_CONNECTED` 等)——客户端运行时概念;
+- IPC channel 白名单(allowlist)、push topic 路由、WS 客户端状态机——纯客户端实现。
+
+客户端完整协议在本包基础上 **extend**:`DeviceLinkErrorCode = RelayErrorCode | 客户端本地码`。
+
+## 3. 常量
+
+| 常量 | 值 | 语义 |
+|---|---|---|
+| `PROTOCOL_VERSION` | 1 | 整数,只升不降;不兼容改动 +1。两侧(relay 与客户端)必须同版本,不一致回 `VERSION_MISMATCH` |
+| `MAX_FRAME_BYTES` | 2 MiB | 单帧最大字节数。relay 超限回 `PAYLOAD_TOO_LARGE` 并丢弃(不断连);发送方应先行拒绝/裁剪而非硬发 |
+| `WS_MAX_PAYLOAD_BYTES` | 4 MiB | ws 库层硬上限兜底(超过直接断连),留余量给协议层先行优雅拒绝 |
+
+## 4. 信封
+
+```ts
+interface Envelope {
+  v: number;          // PROTOCOL_VERSION
+  kind: EnvelopeKind;
+  id?: string;        // requestId(req/resp 配对; relay-error 回带原帧 id)
+  src?: string;       // 源 deviceId —— server 在转发时填写,客户端传入值会被覆盖(防伪造)
+  dst?: string;       // 目标 deviceId(隧道层帧必填)
+  payload?: unknown;
+}
+```
+
+安全要点:**`src` 由 relay 填写**,客户端自称的 src 一律被覆盖——被控端信任的设备身份来自 relay 的账号鉴权,不来自帧内容。
+
+## 5. kind 分层与路由语义
+
+### 连接层(client ↔ relay,relay 解析 payload)
+
+| kind | 方向 | 用途 |
+|---|---|---|
+| `hello` | client → relay | 上线注册:`{ deviceName, platform, appVersion, remoteControlEnabled, busy, deviceInfo? }` |
+| `hello-ack` | relay → client | 注册应答:`{ serverProtocolVersion, deviceId, userId }` |
+| `presence-set` | client → relay | 部分更新自身状态:`{ remoteControlEnabled?, busy? }` |
+| `presence-changed` | relay → 同账号在线设备广播 | 单设备 presence 快照(`PresenceSnapshot`) |
+| `ping` / `pong` | client ↔ relay | 应用层心跳(20s),relay 借 ping 刷新 `lastSeenAt` / 路由 TTL |
+
+### 隧道层(controller ↔ target,relay 只转发)
+
+`link-open` / `link-accept` / `link-close` / `invoke` / `invoke-result` / `push` —— payload 对 relay 不透明,类型定义在客户端包。
+
+### 错误
+
+`relay-error`(relay → 发送方):`{ code: RelayErrorCode, message, dst? }`,`id` 回带原帧 id 便于配对。
+
+### 路由语义(relay 的转发规则,协议的一部分)
+
+```ts
+// 需要 relay 按 dst 转发的帧
+ROUTED_KINDS = { link-open, link-accept, link-close, invoke, invoke-result, push }
+
+// 「发起控制」语义的帧:转发前 relay 必须校验目标设备 remoteControlEnabled === true
+CONTROL_KINDS = { link-open, invoke }
+```
+
+`link-accept` / `invoke-result` / `push` 是被控端 → 控制端的**回程帧**,`link-close` 是双向解除——这三类**不受**被控开关限制:开关关掉后回程帧仍需送达以完成收尾,否则控制端会挂在半开链路上。
+
+## 6. 错误码(`RelayErrorCode`,relay 自身产生)
+
+| code | 含义 |
+|---|---|
+| `DEVICE_OFFLINE` | 目标设备不在线,或不属于本账号 |
+| `REMOTE_DISABLED` | 目标设备「允许被控」开关关闭 |
+| `VERSION_MISMATCH` | 协议版本不一致 |
+| `PAYLOAD_TOO_LARGE` | 单帧超限(见 `MAX_FRAME_BYTES`) |
+| `BAD_REQUEST` | 帧格式非法 |
+| `INTERNAL` | 中继内部错误 |
+
+客户端包的 `DeviceLinkErrorCode` 是本集合的超集(追加客户端本地码);两者的前 6 个值必须保持一致。
+
+## 7. 连接层 payload 参考
+
+- `HelloPayload`:`deviceName` / `platform` / `appVersion` / `remoteControlEnabled` / `busy` / `deviceInfo?`
+- `HelloAckPayload`:`serverProtocolVersion` / `deviceId` / `userId`
+- `PresenceSetPayload`:`remoteControlEnabled?` / `busy?`(部分更新)
+- `DeviceInfo`:`cpuLabel?` / `memoryGb?` / `osVersion?` / `modelLabel?`(全部 best-effort 可缺省)
+- `PresenceSnapshot`(presence-changed 广播与 REST 设备列表共用):`deviceId` / `online` / `deviceName` / `selfName?` / `deviceInfo?` / `platform` / `appVersion` / `lastSeenAt`(unix ms)/ `remoteControlEnabled` / `busy`
+
+## 8. 安全语义小结
+
+1. `src` 由 relay 覆写,客户端不可伪造来源设备。
+2. 路由只在**同账号**设备集合内成立(`DEVICE_OFFLINE` 同时覆盖"不属于本账号",不区分回包,避免探测)。
+3. `CONTROL_KINDS` 帧转发前强制校验目标 `remoteControlEnabled`;回程帧豁免(见 §5)。
+4. 隧道内容 relay 不可见——权限控制(IPC channel 白名单、逐设备黑名单)全部在被控端本地执行,relay 被攻破也拿不到通道语义。
+
+## 9. 版本纪律与迁移状态
+
+- 本包是 relay 层协议**唯一**允许演进的地方:改 `PROTOCOL_VERSION`、kind 集合、信封字段、路由语义,只能在这里改,两个主仓库同窗 bump submodule 指针。
+- 新增 kind:老 relay 对未知 / 不应由 client 发起的 kind **静默丢弃**(debug 日志,不回错、不断连)——发送方表现为无响应超时,是静默黑洞。因此新增需要 relay 转发的 kind 实质上要求**两侧同步升级**(`EnvelopeKind` 集合与 `PROTOCOL_VERSION` 同步变更,drift 由协议互通集成测试兜底)。这一点与 slack-hook-protocol 的"type 开放集合、老端丢帧可降级"策略不同,注意区分。
+- **迁移状态**:主仓库尚未接线。当前两侧各持等价副本:客户端 `packages/device-link/src/protocol.ts`(完整协议,含隧道层)与 relay `apps/device-link-server/src/device-link/protocol.ts`(路由子集),靠注释约定人工同步。接线后:relay 直接 import 本包并删除副本;客户端包 import 本包的信封/常量/连接层类型,仅保留隧道层扩展。

@@ -1,0 +1,144 @@
+/**
+ * === device-link 中继层协议(单一权威来源)===
+ *
+ * 本包是 device-link「relay 中继层」协议的唯一权威定义,由两侧共同引用:
+ *  - relay server(device-link-server):哑中继,只解析 envelope 的路由头
+ *    (v / kind / id / src / dst)与连接层 payload;隧道层 payload(invoke 的
+ *    channel/args、push 的事件内容等)对 relay 完全不透明。
+ *  - 客户端完整协议包(desktop / mobile 共享的 device-link 包):在本包基础上
+ *    extend 隧道层 payload 类型(LinkOpen / Invoke / Push / DeviceView 等)与
+ *    客户端本地错误码(DeviceLinkErrorCode = RelayErrorCode | 客户端局部码)。
+ *
+ * 准入边界:只有 relay 需要解析/校验的部分才进本包;纯客户端之间端到端、
+ * 对 relay 不透明的类型留在客户端协议包里。
+ *
+ * 迁移备注:接线前,两侧各自持有一份等价副本
+ * (packages/device-link/src/protocol.ts 的路由头子集 与
+ *  apps/device-link-server/src/device-link/protocol.ts),靠注释约定人工同步;
+ * 接线后两侧改为 import 本包,删除各自副本,PROTOCOL_VERSION 从此只有一处。
+ */
+
+/** 协议版本:整数,只升不降;不兼容改动 +1。 */
+export const PROTOCOL_VERSION = 1;
+
+/** 单帧最大字节数(超过即回 PAYLOAD_TOO_LARGE 并丢弃,不断连;发送方应先行拒绝/裁剪) */
+export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
+
+/** ws 库层面的硬上限兜底(超过直接断连),留余量给协议层先行优雅拒绝 */
+export const WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+
+export type EnvelopeKind =
+  // —— 连接层(client ↔ server)——
+  | 'hello' // client→server: 上线注册 { deviceName, platform, appVersion, remoteControlEnabled, busy, deviceInfo? }
+  | 'hello-ack' // server→client: { serverProtocolVersion, deviceId, userId }
+  | 'presence-set' // client→server: 部分更新 { remoteControlEnabled?, busy? }
+  | 'presence-changed' // server→同账号在线设备广播: 单设备 presence 快照
+  | 'ping' // client→server: 应用层心跳(20s),server 借此刷 lastSeenAt / route TTL
+  | 'pong' // server→client
+  // —— 隧道层(controller ↔ target,server 只转发)——
+  | 'link-open'
+  | 'link-accept'
+  | 'link-close'
+  | 'invoke'
+  | 'invoke-result'
+  | 'push'
+  // —— 错误(server→发送方)——
+  | 'relay-error';
+
+/** 所有帧的统一信封。src 由 server 填(client 传入值会被覆盖,防伪造)。 */
+export interface Envelope {
+  v: number;
+  kind: EnvelopeKind;
+  /** requestId(req/resp 配对;relay-error 回带原帧 id) */
+  id?: string;
+  /** 源 deviceId(server 在转发时填) */
+  src?: string;
+  /** 目标 deviceId(隧道层帧必填) */
+  dst?: string;
+  payload?: unknown;
+}
+
+/** 需要 server 按 dst 转发的帧 */
+export const ROUTED_KINDS: ReadonlySet<EnvelopeKind> = new Set([
+  'link-open',
+  'link-accept',
+  'link-close',
+  'invoke',
+  'invoke-result',
+  'push',
+]);
+
+/**
+ * 「发起控制」语义的帧:转发前 server 必须校验目标设备 remoteControlEnabled=true。
+ * link-accept / invoke-result / push 是被控端→控制端的回程帧,link-close 是双向解除,
+ * 这三类不受被控开关限制(开关关掉后回程帧仍需送达以收尾)。
+ */
+export const CONTROL_KINDS: ReadonlySet<EnvelopeKind> = new Set(['link-open', 'invoke']);
+
+/**
+ * relay-error 的错误码(relay 自身产生的错误)。
+ * 客户端协议包的 DeviceLinkErrorCode 是本类型的超集
+ * (追加 CHANNEL_NOT_ALLOWED / INVOKE_TIMEOUT 等客户端本地码)。
+ */
+export type RelayErrorCode =
+  | 'DEVICE_OFFLINE' // 目标设备不在线(或不属于本账号)
+  | 'REMOTE_DISABLED' // 目标设备「允许被控」开关关闭
+  | 'VERSION_MISMATCH' // 协议版本不一致
+  | 'PAYLOAD_TOO_LARGE' // 单帧超限
+  | 'BAD_REQUEST' // 帧格式非法
+  | 'INTERNAL'; // 中继内部错误
+
+export interface RelayErrorPayload {
+  code: RelayErrorCode;
+  message: string;
+  /** 路由失败时回带目标设备,便于控制端定位 */
+  dst?: string;
+}
+
+// ─── 连接层 payload(relay 需要解析) ─────────────────────────────────────────
+
+/** hello 帧 payload(client→server) */
+export interface HelloPayload {
+  deviceName: string;
+  platform: string;
+  appVersion: string;
+  remoteControlEnabled: boolean;
+  busy: boolean;
+  deviceInfo?: DeviceInfo;
+}
+
+/** hello-ack 帧 payload(server→client) */
+export interface HelloAckPayload {
+  serverProtocolVersion: number;
+  deviceId: string;
+  userId: string;
+}
+
+/** presence-set 帧 payload(client→server,部分更新) */
+export interface PresenceSetPayload {
+  remoteControlEnabled?: boolean;
+  busy?: boolean;
+}
+
+/** 设备识别用的轻量硬件 / 系统信息。所有字段 best-effort,可缺省。 */
+export interface DeviceInfo {
+  cpuLabel?: string;
+  memoryGb?: number;
+  osVersion?: string;
+  modelLabel?: string;
+}
+
+/** presence-changed 广播 / REST 设备列表共用的设备快照 */
+export interface PresenceSnapshot {
+  deviceId: string;
+  online: boolean;
+  deviceName: string;
+  selfName?: string | null;
+  deviceInfo?: DeviceInfo | null;
+  platform: string;
+  appVersion: string;
+  /** unix ms */
+  lastSeenAt: number;
+  remoteControlEnabled: boolean;
+  busy: boolean;
+}
