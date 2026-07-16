@@ -20,11 +20,11 @@
 
 ## 消费方式
 
-主仓库挂 submodule(约定路径 `shared/`),`pnpm-workspace.yaml` 增加:
+主仓库挂 submodule(约定路径与仓库同名:`cindy-protocol/`,目录树上一眼可见指向本仓),`pnpm-workspace.yaml` 增加:
 
 ```yaml
 packages:
-  - "shared/packages/*"
+  - "cindy-protocol/packages/*"
 ```
 
 依赖照常写 `"@cindy/slack-hook-protocol": "workspace:*"`。
