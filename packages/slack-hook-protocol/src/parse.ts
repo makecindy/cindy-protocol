@@ -1,0 +1,528 @@
+/**
+ * slack-hook-protocol/parse.ts
+ * ---------------------------------------------------------------------------
+ * 协议帧的运行时校验(规则 9: 确定性用代码保证, 不靠对端自觉)。
+ *
+ * parseHookMessage 是两端收帧的唯一入口: 任何来源的原始数据(WS 文本帧或已
+ * JSON.parse 的对象)先过这里, 通过才进入业务; 坏帧返回 ok:false + 具体原因,
+ * 绝不抛异常 —— 调用方按需记日志/断连, 不需要 try/catch。
+ *
+ * 手写校验、零依赖: 校验规则即协议规范本身, 每个分支的错误信息都带字段路径,
+ * 方便两端联调时直接定位是哪个字段不合法。
+ */
+
+import {
+  BIND_UPDATE_STATES,
+  HOOK_MAX_FRAME_CHARS,
+  HOOK_MESSAGE_TYPES,
+  HOOK_PROTOCOL_VERSION,
+  MAX_INTERACTION_BUTTONS,
+  QUERY_KINDS,
+  TASK_ACK_RESULTS,
+  TASK_REJECT_REASONS,
+  TURN_END_STATUSES,
+  type BindUpdatePayload,
+  type HookMessage,
+  type HookMessageType,
+  type HookParseResult,
+  type QueryResponsePayload,
+  type TaskAckPayload,
+  type TaskDispatchPayload,
+  type TurnEndPayload,
+} from './types';
+
+/** 非空字符串。 */
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0;
+}
+
+/** 纯对象(排除 null / 数组)。 */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** string 数组(允许空数组, 元素必须是非空字符串)。 */
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => isNonEmptyString(x));
+}
+
+/** `string | null` 字段(缺省 undefined 不算合法 —— 协议字段必须显式给 null)。 */
+function isNullableString(v: unknown): v is string | null {
+  return v === null || typeof v === 'string';
+}
+
+function fail(error: string): HookParseResult {
+  return { ok: false, error };
+}
+
+// ── 各消息 payload 校验 ──────────────────────────────────────────────────────
+// 每个校验器返回 null 表示通过, 否则返回带字段路径的错误描述。
+
+function validateHello(p: Record<string, unknown>): string | null {
+  if (typeof p.protocolVersion !== 'number') return 'hello.protocolVersion must be a number';
+  if (!isNonEmptyString(p.deviceId)) return 'hello.deviceId must be a non-empty string';
+  if (!isNonEmptyString(p.deviceName)) return 'hello.deviceName must be a non-empty string';
+  if (!isStringArray(p.workspaces)) return 'hello.workspaces must be an array of non-empty strings';
+  if (!isStringArray(p.agents)) return 'hello.agents must be an array of non-empty strings';
+  return null;
+}
+
+function validateWelcome(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.serverName)) return 'welcome.serverName must be a non-empty string';
+  if (!isStringArray(p.features)) return 'welcome.features must be an array of non-empty strings';
+  return null;
+}
+
+/** ping / pong: payload 必须是空对象(有多余键 = 对端实现有误, 拒收暴露问题)。 */
+function validateEmpty(p: Record<string, unknown>, label: string): string | null {
+  if (Object.keys(p).length > 0) return `${label}.payload must be an empty object`;
+  return null;
+}
+
+function validateDispatchOptions(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (!isPlainObject(v)) return 'task.dispatch.options must be an object when present';
+  for (const key of ['model', 'permissionMode', 'agentKind', 'effort'] as const) {
+    if (v[key] !== undefined && !isNullableString(v[key])) {
+      return `task.dispatch.options.${key} must be a string or null`;
+    }
+  }
+  return null;
+}
+
+/** 附件数组上限(粗防御, 精细限额在生产端)。 */
+const MAX_ATTACHMENTS = 16;
+
+/** 附件数组校验(入站 task.dispatch 与出站 turn.end 共用, label 定位错误)。 */
+function validateAttachments(v: unknown, label: string): string | null {
+  if (v === undefined) return null;
+  if (!Array.isArray(v)) return `${label}.attachments must be an array when present`;
+  if (v.length > MAX_ATTACHMENTS) {
+    return `${label}.attachments must have at most ${MAX_ATTACHMENTS} items`;
+  }
+  for (let i = 0; i < v.length; i++) {
+    const a = v[i];
+    if (!isPlainObject(a)) return `${label}.attachments[${i}] must be an object`;
+    if (a.name !== null && typeof a.name !== 'string') {
+      return `${label}.attachments[${i}].name must be a string or null`;
+    }
+    if (!isNonEmptyString(a.mimeType)) {
+      return `${label}.attachments[${i}].mimeType must be a non-empty string`;
+    }
+    if (!isNonEmptyString(a.dataBase64)) {
+      return `${label}.attachments[${i}].dataBase64 must be a non-empty string`;
+    }
+  }
+  return null;
+}
+
+function validateSource(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (!isPlainObject(v)) return 'task.dispatch.source must be an object when present';
+  if (!isNonEmptyString(v.im)) return 'task.dispatch.source.im must be a non-empty string';
+  if (v.channelName !== undefined && !isNullableString(v.channelName)) {
+    return 'task.dispatch.source.channelName must be a string or null';
+  }
+  if (v.userText !== undefined && typeof v.userText !== 'string') {
+    return 'task.dispatch.source.userText must be a string when present';
+  }
+  if (v.threadContext !== undefined) {
+    if (!Array.isArray(v.threadContext)) {
+      return 'task.dispatch.source.threadContext must be an array when present';
+    }
+    for (let i = 0; i < v.threadContext.length; i++) {
+      const entry = v.threadContext[i];
+      if (!isPlainObject(entry)) return `task.dispatch.source.threadContext[${i}] must be an object`;
+      if (typeof entry.author !== 'string') {
+        return `task.dispatch.source.threadContext[${i}].author must be a string`;
+      }
+      if (typeof entry.text !== 'string') {
+        return `task.dispatch.source.threadContext[${i}].text must be a string`;
+      }
+    }
+  }
+  return null;
+}
+
+function validateDispatch(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'task.dispatch.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.externalKey)) return 'task.dispatch.externalKey must be a non-empty string';
+  if (!isNullableString(p.workspace)) return 'task.dispatch.workspace must be a string or null';
+  if (!isNullableString(p.sessionId)) return 'task.dispatch.sessionId must be a string or null';
+  // 会话定位二选一: 无 sessionId(默认路径)时 workspace 必填
+  if (p.sessionId === null && !isNonEmptyString(p.workspace)) {
+    return 'task.dispatch.workspace is required when sessionId is null';
+  }
+  if (p.sessionId !== null && !isNonEmptyString(p.sessionId)) {
+    return 'task.dispatch.sessionId must be a non-empty string when present';
+  }
+  if (!isNonEmptyString(p.prompt)) return 'task.dispatch.prompt must be a non-empty string';
+  const optErr = validateDispatchOptions(p.options);
+  if (optErr) return optErr;
+  const attErr = validateAttachments(p.attachments, 'task.dispatch');
+  if (attErr) return attErr;
+  return validateSource(p.source);
+}
+
+function validateAck(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'task.ack.requestId must be a non-empty string';
+  if (!TASK_ACK_RESULTS.includes(p.result as never)) {
+    return `task.ack.result must be one of: ${TASK_ACK_RESULTS.join(', ')}`;
+  }
+  const result = p.result as TaskAckPayload['result'];
+  // reason 与 result 联动: 仅 rejected 时必填且必须在枚举内
+  if (result === 'rejected') {
+    if (!TASK_REJECT_REASONS.includes(p.reason as never)) {
+      return `task.ack.reason must be one of: ${TASK_REJECT_REASONS.join(', ')} when rejected`;
+    }
+    if (p.sessionId !== null) return 'task.ack.sessionId must be null when rejected';
+  } else {
+    if (p.reason !== null) return 'task.ack.reason must be null unless rejected';
+    if (!isNonEmptyString(p.sessionId)) {
+      return 'task.ack.sessionId must be a non-empty string when accepted/queued';
+    }
+  }
+  // queuePosition 与 result 联动: 仅 queued 时非 null
+  if (result === 'queued') {
+    if (typeof p.queuePosition !== 'number' || !Number.isInteger(p.queuePosition) || p.queuePosition < 0) {
+      return 'task.ack.queuePosition must be a non-negative integer when queued';
+    }
+  } else if (p.queuePosition !== null) {
+    return 'task.ack.queuePosition must be null unless queued';
+  }
+  return null;
+}
+
+function validateTurnEnd(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'turn.end.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.externalKey)) return 'turn.end.externalKey must be a non-empty string';
+  if (!isNullableString(p.sessionId)) return 'turn.end.sessionId must be a string or null';
+  if (!TURN_END_STATUSES.includes(p.status as never)) {
+    return `turn.end.status must be one of: ${TURN_END_STATUSES.join(', ')}`;
+  }
+  if (typeof p.finalText !== 'string') return 'turn.end.finalText must be a string';
+  // errorMessage 与 status 联动: 仅 error 时必填非空, ok / cancelled 恒 null
+  if (p.status === 'error') {
+    if (!isNonEmptyString(p.errorMessage)) {
+      return 'turn.end.errorMessage must be a non-empty string when status is error';
+    }
+  } else if (p.errorMessage !== null) {
+    return `turn.end.errorMessage must be null when status is ${String(p.status)}`;
+  }
+  if (!isPlainObject(p.usage)) return 'turn.end.usage must be an object';
+  const d = p.usage.durationMs;
+  if (d !== null && (typeof d !== 'number' || !Number.isFinite(d) || d < 0)) {
+    return 'turn.end.usage.durationMs must be a non-negative finite number or null';
+  }
+  return validateAttachments(p.attachments, 'turn.end');
+}
+
+function validateTurnProgress(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'turn.progress.requestId must be a non-empty string';
+  if (typeof p.text !== 'string') return 'turn.progress.text must be a string';
+  return null;
+}
+
+// ── v2 增量帧校验 ────────────────────────────────────────────────────────────
+
+/**
+ * 阶段 4 起 email 可选(新端发空对象 {}); 若携带则粗校验为"含 @ 的非空串",
+ * 以便 server 能正常收下老客户端的帧并识别为旧版回升级提示(坏 email 直接
+ * 拒收会丢帧, server 就无从判断)。
+ */
+function validateBindStart(p: Record<string, unknown>): string | null {
+  if (p.email !== undefined && (!isNonEmptyString(p.email) || !p.email.includes('@'))) {
+    return 'bind.start.email, when present, must be an email-like string';
+  }
+  return null;
+}
+
+function validateBindUpdate(p: Record<string, unknown>): string | null {
+  if (!BIND_UPDATE_STATES.includes(p.state as never)) {
+    return `bind.update.state must be one of: ${BIND_UPDATE_STATES.join(', ')}`;
+  }
+  if (!isNullableString(p.slackUserId)) return 'bind.update.slackUserId must be a string or null';
+  if (!isNullableString(p.slackUserName)) return 'bind.update.slackUserName must be a string or null';
+  if (!isNullableString(p.message)) return 'bind.update.message must be a string or null';
+  if (p.authorizeUrl !== undefined && !isNullableString(p.authorizeUrl)) {
+    return 'bind.update.authorizeUrl must be a string or null';
+  }
+  // reason 只校验形状不校验取值: 新 server 推出新 reason 时老客户端照常收下并忽略
+  if (p.reason !== undefined && !isNullableString(p.reason)) {
+    return 'bind.update.reason must be a string or null';
+  }
+  if (p.installUrl !== undefined && !isNullableString(p.installUrl)) {
+    return 'bind.update.installUrl must be a string or null';
+  }
+  if (p.teamName !== undefined && !isNullableString(p.teamName)) {
+    return 'bind.update.teamName must be a string or null';
+  }
+  const state = p.state as BindUpdatePayload['state'];
+  // 字段联动: confirmed 必须带身份 slackUserId; pending(OIDC)必须带授权链接;
+  // failed 必须说明原因
+  if (state === 'confirmed' && !isNonEmptyString(p.slackUserId)) {
+    return 'bind.update.slackUserId must be a non-empty string when state is confirmed';
+  }
+  if (state === 'pending' && !isNonEmptyString(p.authorizeUrl)) {
+    return 'bind.update.authorizeUrl must be a non-empty string when state is pending';
+  }
+  if (state === 'failed' && !isNonEmptyString(p.message)) {
+    return 'bind.update.message must be a non-empty string when state is failed';
+  }
+  return null;
+}
+
+function validateQueryRequest(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.queryId)) return 'query.request.queryId must be a non-empty string';
+  if (!QUERY_KINDS.includes(p.kind as never)) {
+    return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
+  }
+  return null;
+}
+
+/** agents 数组(kind=models 响应体)的形状校验。 */
+function validateAgentModels(v: unknown): string | null {
+  if (!Array.isArray(v)) return 'query.response.agents must be an array';
+  for (let i = 0; i < v.length; i++) {
+    const g = v[i];
+    if (!isPlainObject(g)) return `query.response.agents[${i}] must be an object`;
+    if (!isNonEmptyString(g.agentKind)) {
+      return `query.response.agents[${i}].agentKind must be a non-empty string`;
+    }
+    if (!Array.isArray(g.models)) return `query.response.agents[${i}].models must be an array`;
+    for (let j = 0; j < g.models.length; j++) {
+      const m: unknown = g.models[j];
+      const path = `query.response.agents[${i}].models[${j}]`;
+      if (!isPlainObject(m)) return `${path} must be an object`;
+      if (!isNonEmptyString(m.id)) return `${path}.id must be a non-empty string`;
+      if (!isNonEmptyString(m.label)) return `${path}.label must be a non-empty string`;
+      if (!isStringArray(m.efforts)) return `${path}.efforts must be an array of non-empty strings`;
+      if (!isNullableString(m.defaultEffort)) return `${path}.defaultEffort must be a string or null`;
+      if (m.group !== undefined && !isNullableString(m.group)) {
+        return `${path}.group must be a string or null when present`;
+      }
+    }
+    // permissionModes 可选(旧版 desktop 不发); present 时校验形状
+    if (g.permissionModes !== undefined) {
+      if (!Array.isArray(g.permissionModes)) {
+        return `query.response.agents[${i}].permissionModes must be an array when present`;
+      }
+      for (let j = 0; j < g.permissionModes.length; j++) {
+        const pm: unknown = g.permissionModes[j];
+        const path = `query.response.agents[${i}].permissionModes[${j}]`;
+        if (!isPlainObject(pm)) return `${path} must be an object`;
+        if (!isNonEmptyString(pm.id)) return `${path}.id must be a non-empty string`;
+        if (!isNonEmptyString(pm.label)) return `${path}.label must be a non-empty string`;
+      }
+    }
+  }
+  return null;
+}
+
+function validateQueryResponse(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.queryId)) return 'query.response.queryId must be a non-empty string';
+  if (!QUERY_KINDS.includes(p.kind as never)) {
+    return `query.response.kind must be one of: ${QUERY_KINDS.join(', ')}`;
+  }
+  if (typeof p.ok !== 'boolean') return 'query.response.ok must be a boolean';
+  if (!isNullableString(p.error)) return 'query.response.error must be a string or null';
+  if (!p.ok) {
+    if (!isNonEmptyString(p.error)) {
+      return 'query.response.error must be a non-empty string when ok is false';
+    }
+    return null; // 失败响应不要求携带清单
+  }
+  const kind = p.kind as QueryResponsePayload['kind'];
+  if (kind === 'workspaces') {
+    if (!isStringArray(p.workspaces)) {
+      return 'query.response.workspaces must be an array of non-empty strings when kind is workspaces';
+    }
+    return null;
+  }
+  return validateAgentModels(p.agents);
+}
+
+function validateTaskCancel(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'task.cancel.requestId must be a non-empty string';
+  return null;
+}
+
+function validateSessionArchive(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.externalKey)) {
+    return 'session.archive.externalKey must be a non-empty string';
+  }
+  return null;
+}
+
+// ── 阶段 10(v2): 执行中交互 ─────────────────────────────────────────────────
+
+const BUTTON_STYLES = ['primary', 'danger', 'default'] as const;
+
+function validateInteractionRequest(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'interaction.request.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.interactionId)) {
+    return 'interaction.request.interactionId must be a non-empty string';
+  }
+  if (!isNonEmptyString(p.kind)) return 'interaction.request.kind must be a non-empty string';
+  if (!isNonEmptyString(p.title)) return 'interaction.request.title must be a non-empty string';
+  if (typeof p.body !== 'string') return 'interaction.request.body must be a string';
+  if (!Array.isArray(p.buttons) || p.buttons.length === 0) {
+    return 'interaction.request.buttons must be a non-empty array';
+  }
+  if (p.buttons.length > MAX_INTERACTION_BUTTONS) {
+    return `interaction.request.buttons must have at most ${MAX_INTERACTION_BUTTONS} items`;
+  }
+  const seen = new Set<string>();
+  for (let i = 0; i < p.buttons.length; i++) {
+    const b: unknown = p.buttons[i];
+    const path = `interaction.request.buttons[${i}]`;
+    if (!isPlainObject(b)) return `${path} must be an object`;
+    if (!isNonEmptyString(b.id)) return `${path}.id must be a non-empty string`;
+    // '|' 是 server 侧 value 复合编码的分隔符, id 带它会破坏回传解析
+    if (b.id.includes('|')) return `${path}.id must not contain '|'`;
+    if (seen.has(b.id)) return `${path}.id must be unique within the card`;
+    seen.add(b.id);
+    if (!isNonEmptyString(b.label)) return `${path}.label must be a non-empty string`;
+    if (!BUTTON_STYLES.includes(b.style as never)) {
+      return `${path}.style must be one of: ${BUTTON_STYLES.join(', ')}`;
+    }
+  }
+  return null;
+}
+
+function validateInteractionDecision(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'interaction.decision.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.interactionId)) {
+    return 'interaction.decision.interactionId must be a non-empty string';
+  }
+  if (!isNonEmptyString(p.buttonId)) return 'interaction.decision.buttonId must be a non-empty string';
+  return null;
+}
+
+function validateInteractionCancel(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'interaction.cancel.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.interactionId)) {
+    return 'interaction.cancel.interactionId must be a non-empty string';
+  }
+  if (typeof p.reason !== 'string') return 'interaction.cancel.reason must be a string';
+  return null;
+}
+
+// ── 阶段 11(v2): 目录偏好远程读写 ──────────────────────────────────────────
+
+/** prefs.set 可部分更新的偏好字段(shape 校验共用)。 */
+const PREFS_PATCH_FIELDS = ['model', 'effort', 'agentKind', 'permissionMode'] as const;
+
+function validatePrefsGet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'prefs.get.requestId must be a non-empty string';
+  return null;
+}
+
+function validatePrefsSet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'prefs.set.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.workspace)) return 'prefs.set.workspace must be a non-empty string';
+  // 部分更新语义: 缺席 = 不动, null = 显式清空; 值合法性不在协议层校验
+  for (const field of PREFS_PATCH_FIELDS) {
+    if (p[field] !== undefined && !isNullableString(p[field])) {
+      return `prefs.set.${field} must be a string or null when present`;
+    }
+  }
+  return null;
+}
+
+function validatePrefsState(p: Record<string, unknown>): string | null {
+  if (!isNullableString(p.replyTo)) return 'prefs.state.replyTo must be a string or null';
+  if (typeof p.bound !== 'boolean') return 'prefs.state.bound must be a boolean';
+  if (!Array.isArray(p.prefs)) return 'prefs.state.prefs must be an array';
+  // 字段联动: 未绑定时不该有任何偏好行
+  if (!p.bound && p.prefs.length > 0) return 'prefs.state.prefs must be empty when bound is false';
+  for (let i = 0; i < p.prefs.length; i++) {
+    const entry: unknown = p.prefs[i];
+    const path = `prefs.state.prefs[${i}]`;
+    if (!isPlainObject(entry)) return `${path} must be an object`;
+    if (!isNonEmptyString(entry.workspace)) return `${path}.workspace must be a non-empty string`;
+    for (const field of PREFS_PATCH_FIELDS) {
+      // 快照条目字段必须显式给出(null 而非缺席), 与 UserPrefsRow 同形
+      if (!isNullableString(entry[field])) return `${path}.${field} must be a string or null`;
+    }
+  }
+  return null;
+}
+
+const PAYLOAD_VALIDATORS: Record<
+  HookMessageType,
+  (p: Record<string, unknown>) => string | null
+> = {
+  hello: validateHello,
+  welcome: validateWelcome,
+  ping: (p) => validateEmpty(p, 'ping'),
+  pong: (p) => validateEmpty(p, 'pong'),
+  'task.dispatch': validateDispatch,
+  'task.ack': validateAck,
+  'turn.end': validateTurnEnd,
+  'turn.progress': validateTurnProgress,
+  'bind.start': validateBindStart,
+  'bind.update': validateBindUpdate,
+  'bind.revoke': (p) => validateEmpty(p, 'bind.revoke'),
+  'query.request': validateQueryRequest,
+  'query.response': validateQueryResponse,
+  'task.cancel': validateTaskCancel,
+  'session.archive': validateSessionArchive,
+  'interaction.request': validateInteractionRequest,
+  'interaction.decision': validateInteractionDecision,
+  'interaction.cancel': validateInteractionCancel,
+  'prefs.get': validatePrefsGet,
+  'prefs.set': validatePrefsSet,
+  'prefs.state': validatePrefsState,
+};
+
+/**
+ * 解析并校验一帧协议消息。
+ * 接受 WS 原始文本帧(string)或已 JSON.parse 的对象(unknown); 通过后返回
+ * 判别联合 HookMessage, 调用方按 `message.type` 分发即可获得完整类型收窄。
+ */
+export function parseHookMessage(raw: unknown): HookParseResult {
+  let data: unknown = raw;
+  if (typeof raw === 'string') {
+    if (raw.length > HOOK_MAX_FRAME_CHARS) {
+      return fail(`frame too large: ${raw.length} > ${HOOK_MAX_FRAME_CHARS} chars`);
+    }
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return fail('frame is not valid JSON');
+    }
+  }
+
+  if (!isPlainObject(data)) return fail('envelope must be an object');
+  if (data.v !== HOOK_PROTOCOL_VERSION) {
+    return fail(`unsupported protocol version: ${String(data.v)} (expected ${HOOK_PROTOCOL_VERSION})`);
+  }
+  if (!HOOK_MESSAGE_TYPES.includes(data.type as never)) {
+    return fail(`unknown message type: ${String(data.type)}`);
+  }
+  if (!isNonEmptyString(data.id)) return fail('envelope.id must be a non-empty string');
+  if (typeof data.ts !== 'number' || !Number.isFinite(data.ts)) {
+    return fail('envelope.ts must be a finite number');
+  }
+  if (!isPlainObject(data.payload)) return fail('envelope.payload must be an object');
+
+  const type = data.type as HookMessageType;
+  const validator = Object.hasOwn(PAYLOAD_VALIDATORS, type)
+    ? PAYLOAD_VALIDATORS[type]
+    : undefined;
+  if (!validator) return fail(`no validator for type: ${type}`);
+  const payloadError = validator(data.payload);
+  if (payloadError) return fail(payloadError);
+
+  return { ok: true, message: data as unknown as HookMessage };
+}
+
+/** 类型收窄辅助: 判断字符串是否为 v1 已知消息类型。 */
+export function isHookMessageType(v: string): v is HookMessageType {
+  return HOOK_MESSAGE_TYPES.includes(v as never);
+}
+
+// 类型层自检: payload 校验器覆盖的字段与类型定义保持同步时, 这两个别名不会报错
+type _AssertDispatchShape = keyof TaskDispatchPayload;
+type _AssertTurnEndShape = keyof TurnEndPayload;
