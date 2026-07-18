@@ -29,6 +29,8 @@ export {
   makePrefsGet,
   makePrefsSet,
   makePrefsState,
+  makeToolRequest,
+  makeToolResponse,
   serializeHookMessage,
   type HelloInput,
 } from './build';

@@ -36,6 +36,8 @@ import {
   type HookTaskAckMessage,
   type HookTaskCancelMessage,
   type HookTaskDispatchMessage,
+  type HookToolRequestMessage,
+  type HookToolResponseMessage,
   type HookTurnEndMessage,
   type HookTurnProgressMessage,
   type HookWelcomeMessage,
@@ -51,6 +53,8 @@ import {
   type TaskAckPayload,
   type TaskCancelPayload,
   type TaskDispatchPayload,
+  type ToolRequestPayload,
+  type ToolResponsePayload,
   type TurnEndPayload,
   type TurnProgressPayload,
   type WelcomePayload,
@@ -166,6 +170,14 @@ export function makePrefsSet(payload: PrefsSetPayload): HookPrefsSetMessage {
 
 export function makePrefsState(payload: PrefsStatePayload): HookPrefsStateMessage {
   return envelope('prefs.state', payload);
+}
+
+export function makeToolRequest(payload: ToolRequestPayload): HookToolRequestMessage {
+  return envelope('tool.request', payload);
+}
+
+export function makeToolResponse(payload: ToolResponsePayload): HookToolResponseMessage {
+  return envelope('tool.response', payload);
 }
 
 /** 序列化为 WS 文本帧。与 parseHookMessage 互为逆操作。 */

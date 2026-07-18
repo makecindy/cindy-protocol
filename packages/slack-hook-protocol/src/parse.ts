@@ -408,6 +408,38 @@ function validateInteractionCancel(p: Record<string, unknown>): string | null {
   return null;
 }
 
+// ── 阶段 12(v2): Slack 网关工具 ────────────────────────────────────────────
+
+function validateToolRequest(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'tool.request.requestId must be a non-empty string';
+  // tool 是开放集合: 只校验形状, 未知工具名由 server 业务层回 UNKNOWN_TOOL
+  if (!isNonEmptyString(p.tool)) return 'tool.request.tool must be a non-empty string';
+  if (p.args !== undefined && !isPlainObject(p.args)) {
+    return 'tool.request.args must be an object when present';
+  }
+  return null;
+}
+
+function validateToolResponse(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.replyTo)) return 'tool.response.replyTo must be a non-empty string';
+  if (typeof p.ok !== 'boolean') return 'tool.response.ok must be a boolean';
+  // 字段联动: 失败必须给结构化错误, 成功不得携带 error(result 形状不限)
+  if (p.ok === false) {
+    if (!isPlainObject(p.error)) {
+      return 'tool.response.error must be an object when ok is false';
+    }
+    if (!isNonEmptyString(p.error.code)) {
+      return 'tool.response.error.code must be a non-empty string';
+    }
+    if (!isNonEmptyString(p.error.message)) {
+      return 'tool.response.error.message must be a non-empty string';
+    }
+  } else if (p.error !== undefined && p.error !== null) {
+    return 'tool.response.error must be absent or null when ok is true';
+  }
+  return null;
+}
+
 // ── 阶段 11(v2): 目录偏好远程读写 ──────────────────────────────────────────
 
 /** prefs.set 可部分更新的偏好字段(shape 校验共用)。 */
@@ -474,6 +506,8 @@ const PAYLOAD_VALIDATORS: Record<
   'prefs.get': validatePrefsGet,
   'prefs.set': validatePrefsSet,
   'prefs.state': validatePrefsState,
+  'tool.request': validateToolRequest,
+  'tool.response': validateToolResponse,
 };
 
 /**

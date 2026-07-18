@@ -61,6 +61,17 @@
  *      写入后主动推送(replyTo null; 设备离线静默丢, desktop 重连自拉)。
  *      旧 server 收到 prefs.get 丢帧不断连 -> desktop 侧超时降级为
  *      "服务器版本过旧"提示; 旧 desktop 收到主动 prefs.state 同样丢帧无害。
+ *
+ *   12. 工具:  tool.request(desktop -> server) / tool.response(server ->
+ *      desktop) —— desktop 会话内 agent 调用 server 侧 Slack 网关工具
+ *      (server 以绑定用户托管的 user token 调 Slack 官方 MCP / Web API)。
+ *      方向与 query.* 相反: desktop 是请求方(pending map + 超时在 desktop
+ *      侧), server 收到即执行并以 tool.response(replyTo 回显 requestId)
+ *      应答。tool 名是开放集合(server 不认识回 UNKNOWN_TOOL), 错误一律
+ *      结构化 {code, message} —— desktop 按 code 分支, 不解析文案(规则 9)。
+ *      能力协商: 支持本帧族的 server 在 welcome.features 里带
+ *      HOOK_FEATURE_SLACK_TOOLS; 旧 server 收到 tool.request 丢帧不断连,
+ *      desktop 侧靠 feature 缺席短路 + 超时兜底(SERVER_TOO_OLD)。
  */
 
 /** 当前协议版本。信封 `v` 不等于本值的消息直接拒收。 */
@@ -74,7 +85,7 @@ export const HOOK_PROTOCOL_VERSION = 1;
  */
 export const HOOK_MAX_FRAME_CHARS = 48 * 1024 * 1024;
 
-/** 消息类型全集(v1 七种 + v2 增量七种)。 */
+/** 消息类型全集(v1 七种 + v2 增量帧)。 */
 export const HOOK_MESSAGE_TYPES = [
   'hello',
   'welcome',
@@ -97,6 +108,8 @@ export const HOOK_MESSAGE_TYPES = [
   'prefs.get',
   'prefs.set',
   'prefs.state',
+  'tool.request',
+  'tool.response',
 ] as const;
 
 export type HookMessageType = (typeof HOOK_MESSAGE_TYPES)[number];
@@ -609,6 +622,54 @@ export interface PrefsStatePayload {
   prefs: WorkspacePrefsEntry[];
 }
 
+// ── 阶段 12(v2): Slack 网关工具 ────────────────────────────────────────────
+
+/**
+ * welcome.features 能力标识: server 支持 tool.request / tool.response 帧族
+ * (Slack 网关工具)。desktop 侧发 tool.request 前先查本标识, 缺席直接短路
+ * 为 SERVER_TOO_OLD, 不打空炮。
+ */
+export const HOOK_FEATURE_SLACK_TOOLS = 'slack-tools';
+
+/**
+ * tool.request(desktop -> server): 调用 server 侧 Slack 网关工具。
+ * tool 为开放集合(当前约定 'status' / 'listTools' / 'callTool'), server
+ * 不认识的值回 UNKNOWN_TOOL 错误而非丢帧 —— 网关工具演进不需要协议升级。
+ */
+export interface ToolRequestPayload {
+  /** desktop 生成的关联 id; tool.response.replyTo 回显配对。 */
+  requestId: string;
+  /** 网关工具名(开放集合)。 */
+  tool: string;
+  /** 工具参数(如 callTool 的 { name, arguments }); 省略 = 无参。 */
+  args?: Record<string, unknown>;
+}
+
+/**
+ * 网关工具的结构化错误。code 是机器可读错误码(如 NOT_BOUND / NO_USER_TOKEN /
+ * UNKNOWN_TOOL / TOKEN_EXPIRED / RATE_LIMITED), desktop 按 code 分支提示,
+ * message 仅人类可读补充 —— 两端都不得解析 message 做逻辑(规则 9)。
+ */
+export interface ToolErrorShape {
+  code: string;
+  message: string;
+}
+
+/**
+ * tool.response(server -> desktop): tool.request 的应答。
+ * 字段联动(parse 强制): ok=false 时 error 必须为非空 {code, message};
+ * ok=true 时 error 必须缺席或 null(result 形状由具体工具约定, 协议不限)。
+ */
+export interface ToolResponsePayload {
+  /** 回显 tool.request.requestId。 */
+  replyTo: string;
+  ok: boolean;
+  /** ok=true 时的结果(任意 JSON; listTools/callTool 透传 MCP 结果语义)。 */
+  result?: unknown;
+  /** ok=false 时的结构化错误。 */
+  error?: ToolErrorShape | null;
+}
+
 // ── 消息联合 ─────────────────────────────────────────────────────────────────
 
 export type HookHelloMessage = HookEnvelope<'hello', HelloPayload>;
@@ -632,6 +693,8 @@ export type HookInteractionCancelMessage = HookEnvelope<'interaction.cancel', In
 export type HookPrefsGetMessage = HookEnvelope<'prefs.get', PrefsGetPayload>;
 export type HookPrefsSetMessage = HookEnvelope<'prefs.set', PrefsSetPayload>;
 export type HookPrefsStateMessage = HookEnvelope<'prefs.state', PrefsStatePayload>;
+export type HookToolRequestMessage = HookEnvelope<'tool.request', ToolRequestPayload>;
+export type HookToolResponseMessage = HookEnvelope<'tool.response', ToolResponsePayload>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -655,7 +718,9 @@ export type HookMessage =
   | HookInteractionCancelMessage
   | HookPrefsGetMessage
   | HookPrefsSetMessage
-  | HookPrefsStateMessage;
+  | HookPrefsStateMessage
+  | HookToolRequestMessage
+  | HookToolResponseMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult =
