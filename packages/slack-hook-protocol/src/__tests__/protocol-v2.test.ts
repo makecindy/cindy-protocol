@@ -204,7 +204,7 @@ describe('bind 帧字段联动', () => {
 
   it('bind.revoke 带多余键拒收', () => {
     const msg = makeBindRevoke();
-    expectReject({ ...msg, payload: { extra: 1 } }, 'bind.revoke.payload must be an empty object');
+    expectReject({ ...msg, payload: { extra: 1 } }, 'bind.revoke.extra is not a known field');
   });
 });
 

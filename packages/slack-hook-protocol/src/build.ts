@@ -12,11 +12,14 @@ import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_PROTOCOL_VERSION,
+  type BindRevokePayload,
   type BindStartPayload,
+  type BindStatePayload,
   type BindUpdatePayload,
   type HelloPayload,
   type HookBindRevokeMessage,
   type HookBindStartMessage,
+  type HookBindStateMessage,
   type HookBindUpdateMessage,
   type HookEnvelope,
   type HookHelloMessage,
@@ -122,8 +125,16 @@ export function makeBindUpdate(payload: BindUpdatePayload): HookBindUpdateMessag
   return envelope('bind.update', payload);
 }
 
-export function makeBindRevoke(): HookBindRevokeMessage {
-  return envelope('bind.revoke', {});
+/**
+ * bind.revoke: 缺省空 payload = 解绑本设备全部(老语义); 传 { teamId } =
+ * 只解绑该 workspace(multi-team, 仅 server 声明该能力后使用)。
+ */
+export function makeBindRevoke(payload: BindRevokePayload = {}): HookBindRevokeMessage {
+  return envelope('bind.revoke', payload);
+}
+
+export function makeBindState(payload: BindStatePayload): HookBindStateMessage {
+  return envelope('bind.state', payload);
 }
 
 export function makeQueryRequest(payload: QueryRequestPayload): HookQueryRequestMessage {

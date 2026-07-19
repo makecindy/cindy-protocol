@@ -72,6 +72,30 @@
  *      能力协商: 支持本帧族的 server 在 welcome.features 里带
  *      HOOK_FEATURE_SLACK_TOOLS; 旧 server 收到 tool.request 丢帧不断连,
  *      desktop 侧靠 feature 缺席短路 + 超时兜底(SERVER_TOO_OLD)。
+ *
+ *   13. 多 workspace 绑定(multi-team): 一台设备可同时持有多个
+ *      (teamId, slackUserId) 绑定 —— 每个 Slack workspace(team)一条, 同
+ *      team 内仍一设备一身份。能力协商双向: desktop 在 hello.features 带
+ *      HOOK_FEATURE_MULTI_TEAM 声明自己会消费多绑定帧, server 在
+ *      welcome.features 带同名标识声明支持; 任一侧缺席则整体回落单绑定
+ *      行为(server 对旧 desktop 保持"跨 team 顶替"旧语义, 新 desktop 对
+ *      旧 server 收起添加入口)。增量帧面:
+ *        - bind.state(server -> desktop): 绑定全量快照(权威列表), 连接
+ *          建立与任何绑定变化(新增/解除/被顶)后推送; 旧 desktop 不认识
+ *          本类型, parse 拒收丢帧不断连。
+ *        - bind.update 加可选 teamId: 事件帧按 team 定位(confirmed /
+ *          revoked); 授权流早期(pending)团队未知, teamId 为 null。
+ *        - bind.start 加可选 teamId: 给指定 team 重新授权时 pin 授权页;
+ *          缺省 = 用户在 Slack 授权页自选(可绑任意新 team)。
+ *        - bind.revoke 从空对象放宽为 { teamId?: string|null }: 带 team
+ *          = 只解绑该 team; 空/缺省 = 解绑本设备全部(兼容老 desktop)。
+ *          旧 server 对带 teamId 的帧 parse 拒收, 故 desktop 仅在 server
+ *          声明 multi-team 后才发带 team 的形态。
+ *        - prefs.set / prefs.state 条目 / tool.request 加可选 teamId:
+ *          多绑定下偏好与网关工具的 team 归属消歧; 缺省语义 = 设备唯一
+ *          绑定(多绑定时 server 拒绝猜测, 结构化报错)。
+ *        - TaskSource 加 teamId / teamName: desktop 侧会话记住来源
+ *          workspace(标题展示 + 工具调用默认 team)。
  */
 
 /** 当前协议版本。信封 `v` 不等于本值的消息直接拒收。 */
@@ -110,6 +134,7 @@ export const HOOK_MESSAGE_TYPES = [
   'prefs.state',
   'tool.request',
   'tool.response',
+  'bind.state',
 ] as const;
 
 export type HookMessageType = (typeof HOOK_MESSAGE_TYPES)[number];
@@ -142,6 +167,12 @@ export interface HelloPayload {
   workspaces: string[];
   /** 可用 agent 类型(如 'cc' / 'codex'), 供 server 侧校验 dispatch options。 */
   agents: string[];
+  /**
+   * desktop 侧能力标识(可选, 缺省 = 旧客户端无能力)。当前已定义:
+   * HOOK_FEATURE_MULTI_TEAM —— 会消费 bind.state 快照与按 team 定位的
+   * bind.update / prefs.state。老 server 校验器只查已知字段, 本字段安全透传。
+   */
+  features?: string[];
 }
 
 /** welcome(server -> desktop): hello 的应答, 握手完成。 */
@@ -231,6 +262,12 @@ export interface TaskSource {
   im: string;
   /** 来源显示名(频道名 "#general"、群名等); null = 未知。 */
   channelName?: string | null;
+  /**
+   * (multi-team)来源 Slack workspace id / 显示名: desktop 存进 session
+   * meta, 作会话标题前缀与网关工具调用的默认 team。老 server 不下发。
+   */
+  teamId?: string | null;
+  teamName?: string | null;
   /** 结构化 thread 上下文; 省略或空数组 = 无 thread 历史。 */
   threadContext?: ThreadContextEntry[];
   /**
@@ -363,6 +400,12 @@ export interface TurnProgressPayload {
 export interface BindStartPayload {
   /** @deprecated 旧版邮箱绑定流字段; 新端不再发送, 仅用于 server 识别老客户端。 */
   email?: string;
+  /**
+   * (multi-team)重新授权指定 workspace 时 pin 授权页到该 team(server 在
+   * 授权链接上带 team 参数); 缺省/null = 用户在授权页自选(添加新 team)。
+   * 老 server 校验器不查本字段, 安全透传(它照常签发不 pin 的链接)。
+   */
+  teamId?: string | null;
 }
 
 /**
@@ -424,13 +467,49 @@ export interface BindUpdatePayload {
    * 不下发或档案缺名时为 null/缺省, 桌面端回退只显示用户名。
    */
   teamName?: string | null;
+  /**
+   * (multi-team)事件所属 Slack workspace id: confirmed / revoked 按 team
+   * 定位到绑定列表的对应行; 授权流早期(pending / denied / expired)团队
+   * 尚未确定, 为 null/缺省。老 server 不下发, 单绑定桌面端不依赖本字段。
+   */
+  teamId?: string | null;
 }
 
 /** bind.update.reason 已知值: 绑定的 Slack workspace 未安装本 App。 */
 export const BIND_FAIL_REASON_NOT_INSTALLED = 'not-installed';
 
-/** bind.revoke(desktop -> server): 解除本设备绑定。payload 恒空对象。 */
-export type BindRevokePayload = Record<string, never>;
+/** bind.update.reason 已知值(multi-team): 该绑定被同用户在另一台设备顶替。 */
+export const BIND_FAIL_REASON_SUPERSEDED = 'superseded';
+
+/**
+ * bind.revoke(desktop -> server): 解除本设备绑定。
+ * teamId 非空 = 只解绑该 workspace(multi-team); 空/缺省 = 解绑本设备全部
+ * (兼容单绑定老 desktop 的"关开关即全解")。⚠ 旧 server 对带 teamId 的帧
+ * parse 拒收(它要求空对象), desktop 仅在 welcome.features 声明 multi-team
+ * 后才发按 team 的形态。
+ */
+export interface BindRevokePayload {
+  teamId?: string | null;
+}
+
+/**
+ * bind.state(server -> desktop, multi-team): 本设备绑定全量快照。
+ * 权威列表语义 —— 连接建立与任何绑定变化(新增 / 解除 / 被顶 / 撤权清理)
+ * 后整体推送, desktop 以此对齐本地列表(bind.update 只承载过程事件)。
+ * 仅对 hello.features 声明 multi-team 的连接下发; 旧 desktop 不认识本
+ * 类型, parse 拒收丢帧不断连。
+ */
+export interface BindStateEntry {
+  teamId: string;
+  /** workspace 显示名(安装档案 teamName); 档案缺名时 null。 */
+  teamName: string | null;
+  slackUserId: string;
+  slackUserName: string | null;
+}
+
+export interface BindStatePayload {
+  bindings: BindStateEntry[];
+}
 
 // ── 阶段 6(v2): 实时问答 ────────────────────────────────────────────────────
 
@@ -594,6 +673,11 @@ export interface WorkspacePrefsEntry {
   effort: string | null;
   agentKind: string | null;
   permissionMode: string | null;
+  /**
+   * (multi-team)偏好归属的 Slack workspace。多绑定设备的快照覆盖全部已绑
+   * team, 桌面端按 teamId 分组编辑。老 server 不下发(单绑定语境无歧义)。
+   */
+  teamId?: string | null;
 }
 
 /**
@@ -609,6 +693,11 @@ export interface PrefsSetPayload {
   effort?: string | null;
   agentKind?: string | null;
   permissionMode?: string | null;
+  /**
+   * (multi-team)写入目标 team。缺省/null = 设备唯一绑定(多绑定时 server
+   * 不猜测, 忽略写入并在应答快照中原样回放现状)。老 server 不查本字段。
+   */
+  teamId?: string | null;
 }
 
 /**
@@ -632,6 +721,13 @@ export interface PrefsStatePayload {
 export const HOOK_FEATURE_SLACK_TOOLS = 'slack-tools';
 
 /**
+ * 双向能力标识: 多 workspace 绑定(见文件头第 13 条)。desktop 在
+ * hello.features 声明会消费 bind.state / 按 team 定位的帧; server 在
+ * welcome.features 声明支持。任一侧缺席回落单绑定行为。
+ */
+export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
+
+/**
  * tool.request(desktop -> server): 调用 server 侧 Slack 网关工具。
  * tool 为开放集合(当前约定 'status' / 'listTools' / 'callTool'), server
  * 不认识的值回 UNKNOWN_TOOL 错误而非丢帧 —— 网关工具演进不需要协议升级。
@@ -643,6 +739,12 @@ export interface ToolRequestPayload {
   tool: string;
   /** 工具参数(如 callTool 的 { name, arguments }); 省略 = 无参。 */
   args?: Record<string, unknown>;
+  /**
+   * (multi-team)以哪个 workspace 的绑定身份执行。缺省/null = 设备唯一
+   * 绑定; 多绑定设备缺省时 server 拒绝猜测, 回结构化错误 AMBIGUOUS_TEAM
+   * —— 以错误身份向错误 workspace 发消息是本帧族最重的串台风险(规则 9)。
+   */
+  teamId?: string | null;
 }
 
 /**
@@ -695,6 +797,7 @@ export type HookPrefsSetMessage = HookEnvelope<'prefs.set', PrefsSetPayload>;
 export type HookPrefsStateMessage = HookEnvelope<'prefs.state', PrefsStatePayload>;
 export type HookToolRequestMessage = HookEnvelope<'tool.request', ToolRequestPayload>;
 export type HookToolResponseMessage = HookEnvelope<'tool.response', ToolResponsePayload>;
+export type HookBindStateMessage = HookEnvelope<'bind.state', BindStatePayload>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -720,7 +823,8 @@ export type HookMessage =
   | HookPrefsSetMessage
   | HookPrefsStateMessage
   | HookToolRequestMessage
-  | HookToolResponseMessage;
+  | HookToolResponseMessage
+  | HookBindStateMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult =

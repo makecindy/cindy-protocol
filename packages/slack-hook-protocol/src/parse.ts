@@ -64,6 +64,10 @@ function validateHello(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.deviceName)) return 'hello.deviceName must be a non-empty string';
   if (!isStringArray(p.workspaces)) return 'hello.workspaces must be an array of non-empty strings';
   if (!isStringArray(p.agents)) return 'hello.agents must be an array of non-empty strings';
+  // features 可选(旧 desktop 不发 = 无能力)
+  if (p.features !== undefined && !isStringArray(p.features)) {
+    return 'hello.features must be an array of non-empty strings when present';
+  }
   return null;
 }
 
@@ -122,6 +126,12 @@ function validateSource(v: unknown): string | null {
   if (!isNonEmptyString(v.im)) return 'task.dispatch.source.im must be a non-empty string';
   if (v.channelName !== undefined && !isNullableString(v.channelName)) {
     return 'task.dispatch.source.channelName must be a string or null';
+  }
+  if (v.teamId !== undefined && !isNullableString(v.teamId)) {
+    return 'task.dispatch.source.teamId must be a string or null';
+  }
+  if (v.teamName !== undefined && !isNullableString(v.teamName)) {
+    return 'task.dispatch.source.teamName must be a string or null';
   }
   if (v.userText !== undefined && typeof v.userText !== 'string') {
     return 'task.dispatch.source.userText must be a string when present';
@@ -234,6 +244,9 @@ function validateBindStart(p: Record<string, unknown>): string | null {
   if (p.email !== undefined && (!isNonEmptyString(p.email) || !p.email.includes('@'))) {
     return 'bind.start.email, when present, must be an email-like string';
   }
+  if (p.teamId !== undefined && !isNullableString(p.teamId)) {
+    return 'bind.start.teamId must be a string or null when present';
+  }
   return null;
 }
 
@@ -257,6 +270,9 @@ function validateBindUpdate(p: Record<string, unknown>): string | null {
   if (p.teamName !== undefined && !isNullableString(p.teamName)) {
     return 'bind.update.teamName must be a string or null';
   }
+  if (p.teamId !== undefined && !isNullableString(p.teamId)) {
+    return 'bind.update.teamId must be a string or null';
+  }
   const state = p.state as BindUpdatePayload['state'];
   // 字段联动: confirmed 必须带身份 slackUserId; pending(OIDC)必须带授权链接;
   // failed 必须说明原因
@@ -268,6 +284,35 @@ function validateBindUpdate(p: Record<string, unknown>): string | null {
   }
   if (state === 'failed' && !isNonEmptyString(p.message)) {
     return 'bind.update.message must be a non-empty string when state is failed';
+  }
+  return null;
+}
+
+/**
+ * bind.revoke: 从空对象放宽为 { teamId?: string|null }(multi-team 按 team
+ * 解绑)。除 teamId 外仍不许有多余键 —— 保留"对端实现有误即拒收"的暴露性。
+ */
+function validateBindRevoke(p: Record<string, unknown>): string | null {
+  for (const key of Object.keys(p)) {
+    if (key !== 'teamId') return `bind.revoke.${key} is not a known field`;
+  }
+  if (p.teamId !== undefined && !isNullableString(p.teamId)) {
+    return 'bind.revoke.teamId must be a string or null when present';
+  }
+  return null;
+}
+
+/** bind.state(multi-team): 绑定全量快照。 */
+function validateBindState(p: Record<string, unknown>): string | null {
+  if (!Array.isArray(p.bindings)) return 'bind.state.bindings must be an array';
+  for (let i = 0; i < p.bindings.length; i++) {
+    const b: unknown = p.bindings[i];
+    const path = `bind.state.bindings[${i}]`;
+    if (!isPlainObject(b)) return `${path} must be an object`;
+    if (!isNonEmptyString(b.teamId)) return `${path}.teamId must be a non-empty string`;
+    if (!isNullableString(b.teamName)) return `${path}.teamName must be a string or null`;
+    if (!isNonEmptyString(b.slackUserId)) return `${path}.slackUserId must be a non-empty string`;
+    if (!isNullableString(b.slackUserName)) return `${path}.slackUserName must be a string or null`;
   }
   return null;
 }
@@ -417,6 +462,9 @@ function validateToolRequest(p: Record<string, unknown>): string | null {
   if (p.args !== undefined && !isPlainObject(p.args)) {
     return 'tool.request.args must be an object when present';
   }
+  if (p.teamId !== undefined && !isNullableString(p.teamId)) {
+    return 'tool.request.teamId must be a string or null when present';
+  }
   return null;
 }
 
@@ -459,6 +507,9 @@ function validatePrefsSet(p: Record<string, unknown>): string | null {
       return `prefs.set.${field} must be a string or null when present`;
     }
   }
+  if (p.teamId !== undefined && !isNullableString(p.teamId)) {
+    return 'prefs.set.teamId must be a string or null when present';
+  }
   return null;
 }
 
@@ -476,6 +527,9 @@ function validatePrefsState(p: Record<string, unknown>): string | null {
     for (const field of PREFS_PATCH_FIELDS) {
       // 快照条目字段必须显式给出(null 而非缺席), 与 UserPrefsRow 同形
       if (!isNullableString(entry[field])) return `${path}.${field} must be a string or null`;
+    }
+    if (entry.teamId !== undefined && !isNullableString(entry.teamId)) {
+      return `${path}.teamId must be a string or null when present`;
     }
   }
   return null;
@@ -495,7 +549,8 @@ const PAYLOAD_VALIDATORS: Record<
   'turn.progress': validateTurnProgress,
   'bind.start': validateBindStart,
   'bind.update': validateBindUpdate,
-  'bind.revoke': (p) => validateEmpty(p, 'bind.revoke'),
+  'bind.revoke': validateBindRevoke,
+  'bind.state': validateBindState,
   'query.request': validateQueryRequest,
   'query.response': validateQueryResponse,
   'task.cancel': validateTaskCancel,

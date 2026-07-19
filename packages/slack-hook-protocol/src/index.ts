@@ -19,6 +19,7 @@ export {
   makeBindStart,
   makeBindUpdate,
   makeBindRevoke,
+  makeBindState,
   makeQueryRequest,
   makeQueryResponse,
   makeTaskCancel,
