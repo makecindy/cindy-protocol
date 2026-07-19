@@ -731,6 +731,15 @@ export const HOOK_FEATURE_SLACK_TOOLS = 'slack-tools';
 export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /**
+ * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
+ * workspaces 清单首位(绑定到它的任务以无项目目录的对话模式运行), 真实
+ * 目录别名不许撞名(desktop 侧校验)。server 据此识别伪目录: 清单里只剩
+ * 本别名(用户没配任何真实目录)时不走「单目录自动绑」捷径, 仍发选择卡
+ * 让用户显式确认, 并提示去桌面端配置真实目录。
+ */
+export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
+
+/**
  * tool.request(desktop -> server): 调用 server 侧 Slack 网关工具。
  * tool 为开放集合(当前约定 'status' / 'listTools' / 'callTool'), server
  * 不认识的值回 UNKNOWN_TOOL 错误而非丢帧 —— 网关工具演进不需要协议升级。
