@@ -84,6 +84,12 @@ describe('bind.revoke 放宽', () => {
     roundTrip(makeBindRevoke({ teamId: null }));
   });
 
+  it('pendingOnly(取消在途授权)合法且校验形状', () => {
+    roundTrip(makeBindRevoke({ pendingOnly: true }));
+    const msg = makeBindRevoke();
+    expectReject({ ...msg, payload: { pendingOnly: 'yes' } }, 'bind.revoke.pendingOnly');
+  });
+
   it('多余键仍拒收(保留对端实现错误的暴露性)', () => {
     const msg = makeBindRevoke({ teamId: 'T0AAA' });
     expectReject(

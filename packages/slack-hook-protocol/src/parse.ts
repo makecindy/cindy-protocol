@@ -289,15 +289,20 @@ function validateBindUpdate(p: Record<string, unknown>): string | null {
 }
 
 /**
- * bind.revoke: 从空对象放宽为 { teamId?: string|null }(multi-team 按 team
- * 解绑)。除 teamId 外仍不许有多余键 —— 保留"对端实现有误即拒收"的暴露性。
+ * bind.revoke: 从空对象放宽为 { teamId?, pendingOnly? }(multi-team 按 team
+ * 解绑 / 取消在途授权)。未知键仍拒收 —— 保留"对端实现有误即拒收"的暴露性。
  */
 function validateBindRevoke(p: Record<string, unknown>): string | null {
   for (const key of Object.keys(p)) {
-    if (key !== 'teamId') return `bind.revoke.${key} is not a known field`;
+    if (key !== 'teamId' && key !== 'pendingOnly') {
+      return `bind.revoke.${key} is not a known field`;
+    }
   }
   if (p.teamId !== undefined && !isNullableString(p.teamId)) {
     return 'bind.revoke.teamId must be a string or null when present';
+  }
+  if (p.pendingOnly !== undefined && typeof p.pendingOnly !== 'boolean') {
+    return 'bind.revoke.pendingOnly must be a boolean when present';
   }
   return null;
 }

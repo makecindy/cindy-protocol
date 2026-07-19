@@ -484,12 +484,15 @@ export const BIND_FAIL_REASON_SUPERSEDED = 'superseded';
 /**
  * bind.revoke(desktop -> server): 解除本设备绑定。
  * teamId 非空 = 只解绑该 workspace(multi-team); 空/缺省 = 解绑本设备全部
- * (兼容单绑定老 desktop 的"关开关即全解")。⚠ 旧 server 对带 teamId 的帧
- * parse 拒收(它要求空对象), desktop 仅在 welcome.features 声明 multi-team
- * 后才发按 team 的形态。
+ * (兼容单绑定老 desktop 的"关开关即全解")。pendingOnly=true = 只作废
+ * 进行中的授权尝试(pending 授权 / 等安装登记), 不触碰任何已确认绑定 ——
+ * multi-team 下「取消添加 workspace」的通道(此时 teamId 忽略)。
+ * ⚠ 旧 server 对带字段的帧 parse 拒收(它要求空对象), desktop 仅在
+ * welcome.features 声明 multi-team 后才发非空形态。
  */
 export interface BindRevokePayload {
   teamId?: string | null;
+  pendingOnly?: boolean;
 }
 
 /**
