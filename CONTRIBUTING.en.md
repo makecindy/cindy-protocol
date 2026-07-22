@@ -94,6 +94,10 @@ Because a consuming repo's submodule pointer can only reference a commit that is
      experiences a timeout black hole) — adding a kind that needs relaying is a
      **both-sides-upgrade-together** change; the `EnvelopeKind` set and
      `PROTOCOL_VERSION` must move in lockstep.
+   - `plugin-protocol`: the manifest and the client HTTP envelope are versioned
+     independently. Unknown optional fields may be ignored; an unsupported
+     manifest or envelope version must be rejected outright — the client keeps
+     its existing installs and never applies a partial update.
    - `voice-protocol`: session request/response allow unknown fields and roll out
      via optional fields; the refiner business payload strictly rejects unknown
      fields to prevent project-key abuse. A missing `protocolVersion` is

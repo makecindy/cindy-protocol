@@ -49,6 +49,7 @@
 4. **各协议的兼容策略不同,不要套错**:
    - `slack-hook-protocol`:`type` 是开放集合,老端收到未知类型丢帧不断连——新消息类型天然向后兼容,但必须定义降级体验;
    - `device-link-protocol`:relay 对未知 kind 静默丢弃(发送方表现为超时黑洞)——新增需要转发的 kind 属于**两侧同步升级**的变更,`EnvelopeKind` 集合与 `PROTOCOL_VERSION` 必须同步调整。
+   - `plugin-protocol`:manifest 与客户端 HTTP envelope 分别版本化。未知可选字段可忽略；不支持的 manifest 或 envelope 版本必须拒绝应用，客户端保留已有安装，不做部分更新。
    - `voice-protocol`:会话请求/响应允许未知字段并以可选字段做滚动升级;refiner 业务 payload 为防止项目 Key 被滥用而严格拒绝未知字段。缺省 `protocolVersion` 按 v1 解释,显式不支持的版本直接拒绝。
 5. **不兼容改动必须升协议版本号**,并在 PR 里写明两个消费方仓库的升级时间窗安排。
 6. **改协议必改三件套**:类型定义 + parse 运行时校验(错误信息带字段路径)+ 测试(至少覆盖 roundTrip 与坏帧拒收);涉及行为语义的同步更新 `docs/` 对应文档。
