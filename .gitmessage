@@ -1,0 +1,12 @@
+# <type>(<scope>): <subject>
+# ── 示例 ──────────────────────────────────────────────
+#   feat(device-link): 新增 presence 批量快照 kind
+#   fix(slack-hook): 修正 prefs.set 的 null 字段校验
+#   docs(slack-hook): 补充 turn.progress 节流说明
+#   feat(device-link)!: envelope 增加 trace 字段
+#
+# type : feat | fix | docs | refactor | test | chore | ci | revert
+# scope: slack-hook | device-link | voice | docs | repo
+# 破坏性变更: type 后加 "!",并在正文写 BREAKING CHANGE: 说明,
+#            同一提交内必须 bump 对应协议版本号(PROTOCOL_VERSION)。
+# subject: 祈使句、结尾不加句号;type/scope 用英文,subject 中英文皆可。

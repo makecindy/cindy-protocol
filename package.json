@@ -1,0 +1,25 @@
+{
+  "name": "cindy-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Cindy shared wire protocols (client <-> server): consumed by both the client monorepo and the server monorepo as a git submodule mounted into their pnpm workspaces",
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10.7 <11"
+  },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

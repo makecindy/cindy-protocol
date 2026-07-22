@@ -1,0 +1,7 @@
+# 允许在两个模板之外开自由格式 issue / Allow free-form issues alongside the templates.
+blank_issues_enabled: true
+
+contact_links:
+  - name: 安全问题 / Security issue
+    url: https://github.com/makecindy/cindy-protocol/security/advisories/new
+    about: 敏感安全问题请走私密安全公告(见 SECURITY.md) / Sensitive reports → private Security Advisory (see SECURITY.md)

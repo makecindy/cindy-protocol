@@ -1,0 +1,51 @@
+# ── 构建 / 依赖 ──────────────────────────────────────────────
+node_modules/
+dist/
+*.log
+
+# ── 系统杂物 ─────────────────────────────────────────────────
+# macOS
+.DS_Store
+._*
+# Windows
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.stackdump
+*:Zone.Identifier
+
+# ── AI coding agent 本地状态(避免各家 agent 的隐藏目录污染仓库)──
+# 国际主流
+.claude/
+CLAUDE.local.md
+.codex/
+.cursor/
+.windsurf/
+.gemini/
+.continue/
+.aider*
+.cline/
+.clinerules
+.roo/
+.roomodes
+.opencode/
+.crush/
+.kiro/
+.amazonq/
+.augment/
+.specstory/
+.copilot/
+# 国内主流
+.lingma/
+.qwen/
+.iflow/
+.trae/
+.comate/
+.marscode/
+.codebuddy/
+.codegeex/
+
+# 说明:AGENTS.md / CLAUDE.md 等「有意提交的 agent 指令文件」不在忽略范围。
+# 将来若需要共享某个 agent 的项目级配置(如 .claude/settings.json),
+# 用白名单反向豁免:!.claude/settings.json
