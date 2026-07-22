@@ -94,6 +94,10 @@ Because a consuming repo's submodule pointer can only reference a commit that is
      experiences a timeout black hole) — adding a kind that needs relaying is a
      **both-sides-upgrade-together** change; the `EnvelopeKind` set and
      `PROTOCOL_VERSION` must move in lockstep.
+   - `plugin-protocol`: the manifest and the client HTTP envelope are versioned
+     independently. Unknown optional fields may be ignored; an unsupported
+     manifest or envelope version must be rejected outright — the client keeps
+     its existing installs and never applies a partial update.
    - `voice-protocol`: session request/response allow unknown fields and roll out
      via optional fields; the refiner business payload strictly rejects unknown
      fields to prevent project-key abuse. A missing `protocolVersion` is
@@ -119,7 +123,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 `<type>(<scope>): <subject>`.
 
 - **type**: `feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `ci` / `revert`
-- **scope**: `slack-hook` / `device-link` / `voice` / `docs` / `repo`
+- **scope**: `slack-hook` / `device-link` / `plugin` / `voice` / `docs` / `repo`
 - **subject**: imperative mood, no trailing period; `type`/`scope` in English,
   the subject may be English or Chinese.
 - **Breaking changes**: append `!` after the type (e.g. `feat(device-link)!: ...`),

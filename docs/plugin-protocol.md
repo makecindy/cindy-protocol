@@ -1,0 +1,124 @@
+# Plugin Protocol
+
+`@cindy/plugin-protocol` 是 plugin-server 与未来 Desktop Plugin 客户端共享的零运行时依赖 TypeScript contract。它不是服务，也不负责运行时协议协商。
+
+## 使用方式
+
+主仓库通过 `cindy-protocol` submodule 和 pnpm workspace 引用本包：
+
+```json
+{
+  "dependencies": {
+    "@cindy/plugin-protocol": "workspace:*"
+  }
+}
+```
+
+所有公开类型、常量和校验器都从包根入口导入：
+
+```ts
+import {
+  PluginProtocolError,
+  parseGetPluginResponse,
+  parseListPluginsResponse,
+  parsePluginDownloadResponse,
+  validateGhostManifest,
+  type GhostManifest,
+} from '@cindy/plugin-protocol';
+```
+
+## 边界
+
+本包只包含：
+
+- Ghost 包的 `ghost.json` 类型、格式常量和 `validateGhostManifest`；
+- Desktop 消费的 Plugin 列表、详情与下载响应 DTO、枚举和解析器。
+
+本包不包含服务端数据模型、管理 API DTO、Plugin 生命周期、受众策略、鉴权、对象存储、安装目录、启停状态、IPC、panel 布局或其他 Desktop 运行时逻辑。管理面尚无跨仓 TypeScript 消费方，相关类型由 plugin-server 本地维护；未来出现真实共享消费者时再抽取。
+
+## 校验 Ghost manifest
+
+读取并解析 `ghost.json` 后，把未知值直接交给校验器。校验器不抛异常，而是返回可判别联合类型：
+
+```ts
+const rawManifest: unknown = JSON.parse(ghostJsonText);
+const result = validateGhostManifest(rawManifest);
+
+if (!result.ok) {
+  throw new Error(`ghost.json 不合法: ${result.reason}`);
+}
+
+const manifest: GhostManifest = result.manifest;
+```
+
+成功结果是只包含协议已知字段的规范化对象；`kind` 等有缺省语义的字段会被补齐。不要在校验前把 `unknown` 强转为 `GhostManifest`，也不要在服务端或 Desktop 另写一套 manifest 校验规则。
+
+## 解析客户端 HTTP 响应
+
+HTTP 返回体必须先作为 `unknown` 解析，再交给对应解析器：
+
+```ts
+const list = parseListPluginsResponse(await listResponse.json());
+const detail = parseGetPluginResponse(await detailResponse.json());
+const download = parsePluginDownloadResponse(await downloadResponse.json());
+```
+
+- `parseListPluginsResponse`：解析分页列表摘要，不包含完整 manifest；
+- `parseGetPluginResponse`：解析单个 Plugin 详情及当前 Release 的完整 manifest；
+- `parsePluginDownloadResponse`：解析短期 HTTPS 下载地址及完整性元数据。
+
+三个解析器校验失败都会抛出 `PluginProtocolError`，错误消息包含出错字段路径，调用方应把它视为服务端响应不兼容或损坏，不应继续安装或切换 Release：
+
+```ts
+try {
+  const result = parseGetPluginResponse(await response.json());
+  // 使用 result.plugin
+} catch (error) {
+  if (error instanceof PluginProtocolError) {
+    // 停止本轮远程对账，保留现有本地安装。
+  }
+  throw error;
+}
+```
+
+解析器返回的对象只保留协议已知字段。列表、详情和下载响应中的 SHA-256 必须是 64 位小写十六进制，字节数必须是正整数，时间必须是带毫秒的 UTC ISO 8601 字符串；下载地址只接受 HTTPS。下载响应不含 `schemaVersion`，因为它只会在列表或详情 envelope 已成功解析后请求。
+
+## 字段语义
+
+| 字段             | 语义                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `Plugin.id`      | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。      |
+| `ghostId`        | `ghost.json.id`；同一来源内唯一，跨 Global 与 Organization 来源允许相同。                         |
+| `scope`          | `global` 对任意已登录 Cindy 身份可用；`organization` 只对 `organizationId` 对应组织可用。         |
+| `organizationId` | Global 恒为 `null`；Organization 必须是非空组织 ID。                                              |
+| `defaultInstall` | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。            |
+| `currentRelease` | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。 |
+| `nextCursor`     | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                |
+
+`parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
+
+## 版本
+
+- Ghost manifest 当前只接受 `GHOST_MANIFEST_SCHEMA_VERSION=2`；
+- Plugin HTTP list/detail envelope 当前只接受 `PLUGIN_API_SCHEMA_VERSION=1`；
+- 两个版本号独立演进，不能相互替代。
+
+校验器对未知字段保持宽容，对已知字段和值严格校验。新增可选字段不要求服务端和 Desktop 同时发布；破坏性格式变化必须提升对应 schema version。
+
+未知字段只用于前向兼容，不会出现在校验后的返回对象中。消费方不得依赖当前版本未声明的字段。
+
+## 兼容行为
+
+plugin-server 上传 Release 时使用本包校验 `ghost.json`，不支持的 manifest 不得发布。客户端使用本包解析列表、详情和短期下载凭证；下载响应本身不重复 envelope 版本，客户端只会在成功解析本轮列表/详情后请求它。
+
+未来 Desktop 接入远程 Plugin 后，下载只进入 staging。客户端不支持 manifest 版本时：
+
+- 首次安装失败并提示当前 Cindy 版本不兼容；
+- 更新失败时丢弃 staging，继续保留本地旧 Release；
+- 不执行 final switch，也不更新本地 managed marker。
+
+HTTP envelope 版本不支持时，客户端停止本轮远程对账并保留本地状态。本期不提供按客户端版本选择 Release、多 current Release、capability 上报或其他协商机制。
+
+## 消费顺序
+
+本期由 plugin-server 先消费该包。Desktop 的 submodule pointer、依赖和 manifest re-export 在后续客户端接入任务中统一修改，不要求与本次服务端交付处于同一发布窗口。

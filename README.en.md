@@ -15,16 +15,18 @@ the client repository.
 
 ## Packages
 
-| Package                       | Contents                                                                                                                                                                                                  | Consumers                                                |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `@cindy/slack-hook-protocol`  | hook server ↔ desktop duplex task protocol: envelope, message types, runtime validation, builders                                                                                                         | desktop (hook-control), slack-hook-server                |
-| `@cindy/device-link-protocol` | device-link relay-layer protocol: envelope, routing semantics (ROUTED/CONTROL kinds), connection-layer payloads. Tunnel-layer payloads are opaque to the relay and stay in the client device-link package | desktop/mobile (device-link package), device-link-server |
-| `@cindy/voice-protocol`       | desktop/mobile ↔ voice-server voice control plane: sessions, one-shot tickets, ASR target descriptors, refine payloads, and runtime validation                                                            | desktop, mobile, voice-server                            |
+| Package                       | Contents                                                                                                                                                                                                  | Consumers                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `@cindy/slack-hook-protocol`  | hook server ↔ desktop duplex task protocol: envelope, message types, runtime validation, builders                                                                                                         | desktop (hook-control), slack-hook-server                               |
+| `@cindy/device-link-protocol` | device-link relay-layer protocol: envelope, routing semantics (ROUTED/CONTROL kinds), connection-layer payloads. Tunnel-layer payloads are opaque to the relay and stay in the client device-link package | desktop/mobile (device-link package), device-link-server                |
+| `@cindy/plugin-protocol`      | Ghost package `ghost.json` types and validator, plus the Plugin list/detail/download DTOs and response parsers the Desktop client needs                                                                   | plugin-server; Desktop consumes it in a later remote-Plugin integration |
+| `@cindy/voice-protocol`       | desktop/mobile ↔ voice-server voice control plane: sessions, one-shot tickets, ASR target descriptors, refine payloads, and runtime validation                                                            | desktop, mobile, voice-server                                           |
 
 ## Protocol docs
 
 - [slack-hook-protocol](docs/slack-hook-protocol.md) — hook server ↔ desktop duplex task protocol (envelope, 24 message types, reliability & compatibility strategy)
 - [device-link-protocol](docs/device-link-protocol.md) — device-interconnect relay-layer protocol (dumb-relay model, routing semantics, security semantics)
+- [plugin-protocol](docs/plugin-protocol.md) — Ghost manifest and Plugin HTTP delivery contract (version boundaries, compatibility strategy)
 - [voice-protocol](docs/voice-protocol.md) — voice control-plane protocol (sessions, one-shot tickets, refine payloads, compatibility strategy)
 
 > The protocol docs are currently Chinese-only. English translations are
