@@ -123,7 +123,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 `<type>(<scope>): <subject>`.
 
 - **type**: `feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `ci` / `revert`
-- **scope**: `slack-hook` / `device-link` / `voice` / `docs` / `repo`
+- **scope**: `slack-hook` / `device-link` / `plugin` / `voice` / `docs` / `repo`
 - **subject**: imperative mood, no trailing period; `type`/`scope` in English,
   the subject may be English or Chinese.
 - **Breaking changes**: append `!` after the type (e.g. `feat(device-link)!: ...`),

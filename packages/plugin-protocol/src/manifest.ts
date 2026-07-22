@@ -23,11 +23,11 @@ function isWindowsReservedName(name: string): boolean {
 }
 
 /**
- * 七个卡槽(意识能力的全部出口,runtime-sandbox.md §5)。
+ * 卡槽清单(意识能力的全部出口)。
  * 'cindy' = 请 Cindy 本体代办(借主机自带 AI 能力干活;2026-07-11 定案
  * 由 'model' 更名——本质是 Cindy 在干活,与选模型无关;旧名在校验层作
  * 静默别名兼容,已装老包不消失)。
- * 'network' = 意识自带服务(C4,capability-permissions.md §7):域名白名单
+ * 'network' = 意识自带服务:域名白名单
  * 内的 HTTP 经主机代发(沙箱本身保持零直连),凭证锁主机保险库按声明注入。
  * 'notify' = 系统提示(2026-07-14):意识经管子请主机弹一条轻提示(toast),
  * 意识只供纯文本,整块 UI 主机画并带意识身份头(与订阅槽红条同一信任边界);
@@ -69,13 +69,13 @@ export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 export const GHOST_PANEL_POSITIONS = ['left', 'right'] as const;
 export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 
-/** 面板声明(五个卡槽中的「面板」槽,一段意识至多一块)。 */
+/** 面板声明(卡槽之一,一段意识至多一块)。 */
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
   /** 停靠位置(相对主聊天窗);缺省 = right(2026-07-12 定案)。 */
   position?: GhostPanelPosition;
-  /** 面板界面入口(安装目录内相对路径,意识自绘,C3b 渲染)。 */
+  /** 面板界面入口(安装目录内相对路径,意识自绘,由主机面板容器渲染)。 */
   html: string;
   /** 面板最小宽度(px),布局引擎拖缝时的下限。 */
   minWidth?: number;
@@ -84,7 +84,7 @@ export interface GhostPanelDecl {
 }
 
 /**
- * 芯片型意识注册给 agent 的工具声明(卡槽②,C3d)。
+ * 芯片型意识注册给 agent 的工具声明(卡槽②)。
  * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
  * prompt 缓存前缀,规则 10)——主机在会话建立时按"已装且唤醒"的意识
  * 快照注入工具集。
@@ -102,7 +102,7 @@ export interface GhostToolDecl {
 export const GHOST_MODEL_IMAGE_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelImageAction = (typeof GHOST_MODEL_IMAGE_ACTIONS)[number];
 
-/** cindy 槽·视频类可申请的动作(C3c-5:generate=文生视频,edit=参考图生视频)。 */
+/** cindy 槽·视频类可申请的动作(generate=文生视频,edit=参考图生视频)。 */
 export const GHOST_MODEL_VIDEO_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelVideoAction = (typeof GHOST_MODEL_VIDEO_ACTIONS)[number];
 
@@ -153,7 +153,7 @@ export interface GhostSubscribeNeeds {
   hooks?: GhostSubscribeHook[];
 }
 
-/* ── network 槽详单(C4,capability-permissions.md §7)────────────────────
+/* ── network 槽详单──────────────────────────────────
  * 意识自带服务:作者声明域名白名单 + 凭证需求,装入时钉死、确认框逐项展示。
  * 运行期沙箱仍零直连,所有出网经管子 fetch-request 由主机代发;凭证明文
  * 永不进沙箱——主机只在"该凭证声明的注入位置"拼进请求头。 */
@@ -583,7 +583,7 @@ export function isValidGhostId(id: unknown): id is string {
 }
 
 /**
- * 装入确认框的单项权限(C3c-1 逐项权限清单,capability-permissions.md §1)。
+ * 装入确认框的单项权限(逐项权限清单)。
  * 纯数据描述:renderer 拼 `settings.ghosts.perm.<labelKey>` 翻译,`detail` 是
  * 作者自由文本(如工具描述)如实展示不翻译,`detailKey` 是主机固定说明的
  * i18n 后缀(如可执行代码的沙箱说明)——两者互斥。
@@ -874,7 +874,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
-    // 类目 → 合法动作表(C3c-5 起 image / video 两类;动作集恰好同名,但按
+    // 类目 → 合法动作表(image / video 两类;动作集恰好同名,但按
     // 类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
       image: GHOST_MODEL_IMAGE_ACTIONS,
@@ -962,7 +962,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
   }
 
-  // network 槽详单(C4):与 slots 含 'network' 成对(有详单必有槽;有槽
+  // network 槽详单:与 slots 含 'network' 成对(有详单必有槽;有槽
   // 无详单允许装入但零能力,同 cindy / subscribe 语义)。hosts 是核心声明;
   // secrets 每条必须带 inject(没有注入位置的凭证无处可用),inject.hosts
   // 必须是 hosts 声明条目的子集——结构上钉死"key 只流向它声明的域名"。
