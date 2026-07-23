@@ -108,7 +108,7 @@ CONTROL_KINDS = { link-open, invoke }
 - `HelloPayload`:`deviceName` / `platform` / `appVersion` / `remoteControlEnabled` / `busy` / `deviceInfo?`
 - `HelloAckPayload`:`serverProtocolVersion` / `deviceId` / `userId` / `capabilities?`(server 可选能力集,append-only;老 server 缺省 = 空集)
 - `PresenceSetPayload`:`remoteControlEnabled?` / `busy?`(部分更新)
-- `NotifyPayload`:`category`(`session-done` / `session-error` / `session-needs-reply`)/ `title` / `body?` / `deepLink` / `collapseId` / `targetDeviceId?`。字段长度上限见 `NOTIFY_TITLE_MAX_LENGTH` 等常量;隐私要求:只放会话标题与终态,不放消息内容(推送经 APNs/FCM 第三方通道)
+- `NotifyPayload`:`category`(`session-done` / `session-error` / `session-needs-reply`)/ `title` / `body?` / `deepLink` / `collapseId` / `targetDeviceId?`。字段长度上限见 `NOTIFY_TITLE_MAX_LENGTH` 等常量;`body` 可放内容摘要(体验优先的产品决策)——正文经 APNs/FCM 第三方通道,由发送端裁剪长度与敏感度,relay 不落盘通知内容
 - `DeviceInfo`:`cpuLabel?` / `memoryGb?` / `osVersion?` / `modelLabel?`(全部 best-effort 可缺省)
 - `PresenceSnapshot`(presence-changed 广播与 REST 设备列表共用):`deviceId` / `online` / `deviceName` / `selfName?` / `deviceInfo?` / `platform` / `appVersion` / `lastSeenAt`(unix ms)/ `remoteControlEnabled` / `busy`
 

@@ -149,9 +149,13 @@ export const NOTIFY_COLLAPSE_ID_MAX_LENGTH = 128;
  */
 export interface NotifyPayload {
   category: NotifyCategory;
-  /** 通知标题(建议:会话标题)。只放标题与终态,不放消息内容(经第三方推送通道)。 */
+  /** 通知标题(建议:会话标题) */
   title: string;
-  /** 通知正文(终态描述),可缺省 */
+  /**
+   * 通知正文,可缺省。发送端可放内容摘要(如最近一条 assistant 回复)——
+   * 体验优先的产品决策;注意正文经 APNs/FCM 第三方通道,发送端自行裁剪长度
+   * 与敏感度,server 不落盘通知内容。
+   */
   body?: string;
   /** 点击通知的跳转深链,如 cindy://devices/<deviceId>/sessions/<sessionId> */
   deepLink: string;
