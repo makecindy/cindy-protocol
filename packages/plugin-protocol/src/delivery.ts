@@ -1,12 +1,12 @@
 import { isValidGhostId, validateGhostManifest, type GhostManifest } from './manifest.js';
 
 /** Plugin 客户端 HTTP list/detail envelope 版本；与 ghost.json 版本独立演进。 */
-export const PLUGIN_API_SCHEMA_VERSION = 1 as const;
+export const PLUGIN_API_SCHEMA_VERSION = 2 as const;
 
 /** 普通客户端可见的 Plugin 来源范围。 */
-export const PLUGIN_SCOPES = ['global', 'organization'] as const;
+export const PLUGIN_SCOPES = ['public', 'organization', 'personal'] as const;
 
-/** `global` 对所有已登录身份可见；`organization` 只对所属组织可见。 */
+/** `public` 对所有已登录身份可见；其余范围只对对应组织或自然人可见。 */
 export type PluginScope = (typeof PLUGIN_SCOPES)[number];
 
 /** 列表和详情共用的当前 Release 摘要。 */
@@ -43,7 +43,7 @@ export interface VisiblePluginSummary {
   author: string | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
-  /** Global 恒为 `null`；Organization 必须是非空组织 ID。 */
+  /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
@@ -65,7 +65,7 @@ export interface VisiblePluginDetail {
   author: string | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
-  /** Global 恒为 `null`；Organization 必须是非空组织 ID。 */
+  /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
@@ -204,7 +204,7 @@ function parseVisiblePluginBase(
   const scope = raw.scope as PluginScope;
   const organizationId = raw.organizationId;
   if (
-    (scope === 'global' && organizationId !== null) ||
+    ((scope === 'public' || scope === 'personal') && organizationId !== null) ||
     (scope === 'organization' &&
       (typeof organizationId !== 'string' || organizationId.length === 0))
   ) {

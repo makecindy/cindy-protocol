@@ -15,9 +15,11 @@ import {
   BIND_UPDATE_STATES,
   HOOK_MAX_FRAME_CHARS,
   HOOK_MESSAGE_TYPES,
+  HOOK_PROVIDERS,
   HOOK_PROTOCOL_VERSION,
   MAX_INTERACTION_BUTTONS,
   QUERY_KINDS,
+  PROVIDER_BIND_STATES,
   TASK_ACK_RESULTS,
   TASK_REJECT_REASONS,
   TURN_END_STATUSES,
@@ -25,6 +27,7 @@ import {
   type HookMessage,
   type HookMessageType,
   type HookParseResult,
+  type ProviderBindStatusPayload,
   type QueryResponsePayload,
   type TaskAckPayload,
   type TaskDispatchPayload,
@@ -49,6 +52,38 @@ function isStringArray(v: unknown): v is string[] {
 /** `string | null` 字段(缺省 undefined 不算合法 —— 协议字段必须显式给 null)。 */
 function isNullableString(v: unknown): v is string | null {
   return v === null || typeof v === 'string';
+}
+
+function isNullableNonEmptyString(v: unknown): v is string | null {
+  return v === null || isNonEmptyString(v);
+}
+
+/** Positive unix-millisecond timestamp. */
+function isPositiveTimestamp(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+}
+
+/** Provider links are always HTTPS; provider-specific allowlists live in the host. */
+function isSafeHttpsUrl(v: unknown): v is string {
+  if (!isNonEmptyString(v)) return false;
+  try {
+    const url = new URL(v);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname.length > 0 &&
+      url.username.length === 0 &&
+      url.password.length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validateProvider(v: unknown, path: string): string | null {
+  if (!HOOK_PROVIDERS.includes(v as never)) {
+    return `${path} must be one of: ${HOOK_PROVIDERS.join(', ')}`;
+  }
+  return null;
 }
 
 function fail(error: string): HookParseResult {
@@ -329,6 +364,161 @@ function validateBindState(p: Record<string, unknown>): string | null {
   return null;
 }
 
+function validateProviderBindStart(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.bind.start.requestId must be a non-empty string';
+  }
+  const providerError = validateProvider(p.provider, 'provider.bind.start.provider');
+  if (providerError) return providerError;
+  if (p.scopeId !== undefined && !isNullableNonEmptyString(p.scopeId)) {
+    return 'provider.bind.start.scopeId must be a non-empty string or null when present';
+  }
+  return null;
+}
+
+function validateProviderBindCancel(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.bind.cancel.requestId must be a non-empty string';
+  }
+  const providerError = validateProvider(p.provider, 'provider.bind.cancel.provider');
+  if (providerError) return providerError;
+  if (!isNonEmptyString(p.attemptId)) {
+    return 'provider.bind.cancel.attemptId must be a non-empty string';
+  }
+  return null;
+}
+
+function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.bind.revoke.requestId must be a non-empty string';
+  }
+  const providerError = validateProvider(p.provider, 'provider.bind.revoke.provider');
+  if (providerError) return providerError;
+  if (!isNonEmptyString(p.bindingId)) {
+    return 'provider.bind.revoke.bindingId must be a non-empty string';
+  }
+  return null;
+}
+
+const PROVIDER_BIND_ID_FIELDS = [
+  'attemptId',
+  'bindingId',
+  'principalId',
+  'principalName',
+  'scopeId',
+  'scopeName',
+] as const;
+
+const PROVIDER_BIND_FAILURE_STATES = [
+  'denied',
+  'expired',
+  'failed',
+  'revoked',
+  'superseded',
+] as const;
+
+/** provider.bind.update/state share one strict, replacement-safe snapshot shape. */
+function validateProviderBindStatus(
+  p: Record<string, unknown>,
+  label: 'provider.bind.update' | 'provider.bind.state',
+): string | null {
+  const providerError = validateProvider(p.provider, `${label}.provider`);
+  if (providerError) return providerError;
+  if (!isNullableNonEmptyString(p.replyTo)) {
+    return `${label}.replyTo must be a non-empty string or null`;
+  }
+  if (!PROVIDER_BIND_STATES.includes(p.state as never)) {
+    return `${label}.state must be one of: ${PROVIDER_BIND_STATES.join(', ')}`;
+  }
+  for (const field of PROVIDER_BIND_ID_FIELDS) {
+    if (!isNullableNonEmptyString(p[field])) {
+      return `${label}.${field} must be a non-empty string or null`;
+    }
+  }
+  if (p.connectUrl !== null && !isSafeHttpsUrl(p.connectUrl)) {
+    return `${label}.connectUrl must be a safe HTTPS URL or null`;
+  }
+  if (p.remediationUrl !== null && !isSafeHttpsUrl(p.remediationUrl)) {
+    return `${label}.remediationUrl must be a safe HTTPS URL or null`;
+  }
+  if (p.expiresAt !== null && !isPositiveTimestamp(p.expiresAt)) {
+    return `${label}.expiresAt must be a positive integer timestamp or null`;
+  }
+  if (!isNullableNonEmptyString(p.reason)) {
+    return `${label}.reason must be a non-empty string or null`;
+  }
+  if (!isStringArray(p.actions)) {
+    return `${label}.actions must be an array of non-empty strings`;
+  }
+  if (p.actions.length > 16) return `${label}.actions must have at most 16 items`;
+  if (new Set(p.actions).size !== p.actions.length) {
+    return `${label}.actions must not contain duplicates`;
+  }
+
+  const state = p.state as ProviderBindStatusPayload['state'];
+  const attemptState =
+    state === 'pending' ||
+    state === 'awaiting_confirmation' ||
+    state === 'denied' ||
+    state === 'expired' ||
+    state === 'failed';
+  const activeAttemptState = state === 'pending' || state === 'awaiting_confirmation';
+  const failedAttemptState = state === 'denied' || state === 'expired' || state === 'failed';
+  if (attemptState && !isNonEmptyString(p.attemptId)) {
+    return `${label}.attemptId must be non-empty for attempt state ${state}`;
+  }
+  if (activeAttemptState && p.bindingId !== null) {
+    return `${label}.bindingId must be null when state is ${state}`;
+  }
+  if (failedAttemptState) {
+    for (const field of ['bindingId', 'principalId', 'principalName'] as const) {
+      if (p[field] !== null) {
+        return `${label}.${field} must be null when state is ${state}`;
+      }
+    }
+    if (p.expiresAt !== null) {
+      return `${label}.expiresAt must be null when state is ${state}`;
+    }
+  }
+  if (activeAttemptState && !isPositiveTimestamp(p.expiresAt)) {
+    return `${label}.expiresAt must be non-null for active attempt state ${state}`;
+  }
+  if (state === 'pending' && !isSafeHttpsUrl(p.connectUrl)) {
+    return `${label}.connectUrl must be a safe HTTPS URL when state is pending`;
+  }
+  if (state !== 'pending' && p.connectUrl !== null) {
+    return `${label}.connectUrl must be null unless state is pending`;
+  }
+  if (state === 'confirmed') {
+    for (const field of ['bindingId', 'principalId', 'scopeId'] as const) {
+      if (!isNonEmptyString(p[field])) {
+        return `${label}.${field} must be non-empty when state is confirmed`;
+      }
+    }
+  }
+  if ((state === 'revoked' || state === 'superseded') && !isNonEmptyString(p.bindingId)) {
+    return `${label}.bindingId must be non-empty when state is ${state}`;
+  }
+  if (PROVIDER_BIND_FAILURE_STATES.includes(state as never) && !isNonEmptyString(p.reason)) {
+    return `${label}.reason must be non-empty when state is ${state}`;
+  }
+  if (
+    (state === 'none' || state === 'confirmed' || state === 'revoked' || state === 'superseded') &&
+    (p.attemptId !== null || p.expiresAt !== null)
+  ) {
+    return `${label}.attemptId and expiresAt must be null when state is ${state}`;
+  }
+  if (state === 'none') {
+    for (const field of ['bindingId', 'principalId', 'principalName'] as const) {
+      if (p[field] !== null) return `${label}.${field} must be null when state is none`;
+    }
+  }
+  if (!PROVIDER_BIND_FAILURE_STATES.includes(state as never) && p.reason !== null) {
+    return `${label}.reason must be null when state is ${state}`;
+  }
+  return null;
+}
+
 function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.queryId)) return 'query.request.queryId must be a non-empty string';
   if (!QUERY_KINDS.includes(p.kind as never)) {
@@ -377,6 +567,41 @@ function validateAgentModels(v: unknown): string | null {
   return null;
 }
 
+function looksLikeAbsolutePath(v: string): boolean {
+  return v.startsWith('/') || v.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(v) || /^file:/i.test(v);
+}
+
+function validateQuerySessions(v: unknown): string | null {
+  if (!Array.isArray(v)) return 'query.response.sessions must be an array';
+  if (v.length > 20) return 'query.response.sessions must have at most 20 items';
+  const ids = new Set<string>();
+  const allowedFields = new Set(['id', 'title', 'workspace', 'lastActiveAt']);
+  for (let i = 0; i < v.length; i++) {
+    const session: unknown = v[i];
+    const path = `query.response.sessions[${i}]`;
+    if (!isPlainObject(session)) return `${path} must be an object`;
+    for (const field of Object.keys(session)) {
+      if (!allowedFields.has(field)) {
+        return `${path}.${field} is not allowed in the privacy-minimised session shape`;
+      }
+    }
+    if (!isNonEmptyString(session.id)) return `${path}.id must be a non-empty string`;
+    if (ids.has(session.id)) return `${path}.id must be unique within the response`;
+    ids.add(session.id);
+    if (!isNonEmptyString(session.title)) return `${path}.title must be a non-empty string`;
+    if (!isNonEmptyString(session.workspace)) {
+      return `${path}.workspace must be a non-empty alias`;
+    }
+    if (looksLikeAbsolutePath(session.workspace)) {
+      return `${path}.workspace must not be an absolute path`;
+    }
+    if (!isPositiveTimestamp(session.lastActiveAt)) {
+      return `${path}.lastActiveAt must be a positive integer timestamp`;
+    }
+  }
+  return null;
+}
+
 function validateQueryResponse(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.queryId)) return 'query.response.queryId must be a non-empty string';
   if (!QUERY_KINDS.includes(p.kind as never)) {
@@ -397,7 +622,8 @@ function validateQueryResponse(p: Record<string, unknown>): string | null {
     }
     return null;
   }
-  return validateAgentModels(p.agents);
+  if (kind === 'models') return validateAgentModels(p.agents);
+  return validateQuerySessions(p.sessions);
 }
 
 function validateTaskCancel(p: Record<string, unknown>): string | null {
@@ -552,6 +778,80 @@ function validatePrefsState(p: Record<string, unknown>): string | null {
   return null;
 }
 
+function validateProviderPrefsSelector(
+  p: Record<string, unknown>,
+  label: 'provider.prefs.get' | 'provider.prefs.set' | 'provider.prefs.state',
+): string | null {
+  const providerError = validateProvider(p.provider, `${label}.provider`);
+  if (providerError) return providerError;
+  if (!isNullableNonEmptyString(p.bindingId)) {
+    return `${label}.bindingId must be a non-empty string or null`;
+  }
+  if (!isNullableNonEmptyString(p.scopeId)) {
+    return `${label}.scopeId must be a non-empty string or null`;
+  }
+  if ((p.bindingId === null) === (p.scopeId === null)) {
+    return `${label} must select exactly one of bindingId or scopeId`;
+  }
+  return null;
+}
+
+function validateProviderPrefsGet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.prefs.get.requestId must be a non-empty string';
+  }
+  return validateProviderPrefsSelector(p, 'provider.prefs.get');
+}
+
+function validateProviderPrefsSet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.prefs.set.requestId must be a non-empty string';
+  }
+  const selectorError = validateProviderPrefsSelector(p, 'provider.prefs.set');
+  if (selectorError) return selectorError;
+  if (!isNonEmptyString(p.workspace)) {
+    return 'provider.prefs.set.workspace must be a non-empty string';
+  }
+  if (looksLikeAbsolutePath(p.workspace)) {
+    return 'provider.prefs.set.workspace must not be an absolute path';
+  }
+  for (const field of PREFS_PATCH_FIELDS) {
+    if (p[field] !== undefined && !isNullableString(p[field])) {
+      return `provider.prefs.set.${field} must be a string or null when present`;
+    }
+  }
+  return null;
+}
+
+function validateProviderPrefsState(p: Record<string, unknown>): string | null {
+  const selectorError = validateProviderPrefsSelector(p, 'provider.prefs.state');
+  if (selectorError) return selectorError;
+  if (!isNullableNonEmptyString(p.replyTo)) {
+    return 'provider.prefs.state.replyTo must be a non-empty string or null';
+  }
+  if (typeof p.bound !== 'boolean') return 'provider.prefs.state.bound must be a boolean';
+  if (!Array.isArray(p.prefs)) return 'provider.prefs.state.prefs must be an array';
+  if (!p.bound && p.prefs.length > 0) {
+    return 'provider.prefs.state.prefs must be empty when bound is false';
+  }
+  for (let i = 0; i < p.prefs.length; i++) {
+    const entry: unknown = p.prefs[i];
+    const path = `provider.prefs.state.prefs[${i}]`;
+    if (!isPlainObject(entry)) return `${path} must be an object`;
+    if (!isNonEmptyString(entry.workspace)) return `${path}.workspace must be a non-empty string`;
+    if (looksLikeAbsolutePath(entry.workspace)) {
+      return `${path}.workspace must not be an absolute path`;
+    }
+    for (const field of PREFS_PATCH_FIELDS) {
+      if (!isNullableString(entry[field])) return `${path}.${field} must be a string or null`;
+    }
+    if (entry.teamId !== undefined) {
+      return `${path}.teamId is Slack-specific and is not allowed in provider prefs`;
+    }
+  }
+  return null;
+}
+
 const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) => string | null> = {
   hello: validateHello,
   welcome: validateWelcome,
@@ -565,6 +865,11 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'bind.update': validateBindUpdate,
   'bind.revoke': validateBindRevoke,
   'bind.state': validateBindState,
+  'provider.bind.start': validateProviderBindStart,
+  'provider.bind.cancel': validateProviderBindCancel,
+  'provider.bind.revoke': validateProviderBindRevoke,
+  'provider.bind.update': (p) => validateProviderBindStatus(p, 'provider.bind.update'),
+  'provider.bind.state': (p) => validateProviderBindStatus(p, 'provider.bind.state'),
   'query.request': validateQueryRequest,
   'query.response': validateQueryResponse,
   'task.cancel': validateTaskCancel,
@@ -575,6 +880,9 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'prefs.get': validatePrefsGet,
   'prefs.set': validatePrefsSet,
   'prefs.state': validatePrefsState,
+  'provider.prefs.get': validateProviderPrefsGet,
+  'provider.prefs.set': validateProviderPrefsSet,
+  'provider.prefs.state': validateProviderPrefsState,
   'tool.request': validateToolRequest,
   'tool.response': validateToolResponse,
 };

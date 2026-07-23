@@ -15,6 +15,7 @@
 | `@cindy/slack-hook-protocol`  | hook server ↔ desktop 双工任务协议:信封、消息类型、运行时校验、构造器                                                                 | desktop(hook-control)、slack-hook-server            |
 | `@cindy/device-link-protocol` | device-link 中继层协议:信封、路由语义(ROUTED/CONTROL kinds)、连接层 payload。隧道层 payload 对 relay 不透明,留在客户端 device-link 包 | desktop/mobile(device-link 包)、device-link-server  |
 | `@cindy/plugin-protocol`      | Ghost 包 `ghost.json` 类型与校验器、Desktop 所需 Plugin 列表/详情/下载 DTO 与响应解析器                                               | plugin-server；Desktop 在后续远程 Plugin 接入时消费 |
+| `@cindy/skill-protocol`       | Skill 发布包 manifest、Desktop 所需 Skill 列表/详情/下载 DTO 与响应解析器                                                             | plugin-server Skill Domain；Desktop Skill 市场      |
 | `@cindy/voice-protocol`       | desktop/mobile ↔ voice-server 语音控制面:会话、一次性 ticket、ASR 目标描述、refine payload 与运行时校验                               | desktop、mobile、voice-server                       |
 
 ## 协议文档
@@ -22,6 +23,7 @@
 - [slack-hook-protocol](docs/slack-hook-protocol.md) — hook server ↔ desktop 双工任务协议(信封、24 种消息、可靠性与兼容策略)
 - [device-link-protocol](docs/device-link-protocol.md) — 设备互联中继层协议(哑中继模型、路由语义、安全语义)
 - [plugin-protocol](docs/plugin-protocol.md) — Ghost manifest 与 Plugin HTTP 交付契约、版本边界和兼容策略
+- [skill-protocol](docs/skill-protocol.md) — Skill 发布 manifest 与市场 HTTP 交付契约、Scope 和兼容策略
 - [voice-protocol](docs/voice-protocol.md) — 语音控制面协议(会话、一次性 ticket、refine payload 与兼容策略)
 
 ## 消费方式

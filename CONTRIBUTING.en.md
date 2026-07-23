@@ -98,6 +98,9 @@ Because a consuming repo's submodule pointer can only reference a commit that is
      independently. Unknown optional fields may be ignored; an unsupported
      manifest or envelope version must be rejected outright — the client keeps
      its existing installs and never applies a partial update.
+   - `skill-protocol`: the publish manifest and client HTTP envelope are versioned
+     independently. Unknown optional fields may be ignored; unsupported versions
+     must be rejected, and a failed client update retains the existing Skill.
    - `voice-protocol`: session request/response allow unknown fields and roll out
      via optional fields; the refiner business payload strictly rejects unknown
      fields to prevent project-key abuse. A missing `protocolVersion` is

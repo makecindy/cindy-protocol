@@ -325,7 +325,7 @@ describe('query 帧字段联动', () => {
 
   it('未知 kind 拒收', () => {
     const msg = makeQueryRequest({ queryId: 'q-1', kind: 'workspaces' });
-    expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'sessions' } }, 'kind must be one of');
+    expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'channels' } }, 'kind must be one of');
   });
 });
 
