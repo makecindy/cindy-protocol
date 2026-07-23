@@ -58,13 +58,13 @@ interface Envelope {
 
 ### 连接层(client ↔ relay,relay 解析 payload)
 
-| kind               | 方向                       | 用途                                                                                     |
-| ------------------ | -------------------------- | ---------------------------------------------------------------------------------------- |
-| `hello`            | client → relay             | 上线注册:`{ deviceName, platform, appVersion, remoteControlEnabled, busy, deviceInfo? }` |
-| `hello-ack`        | relay → client             | 注册应答:`{ serverProtocolVersion, deviceId, userId, capabilities? }`                    |
-| `presence-set`     | client → relay             | 部分更新自身状态:`{ remoteControlEnabled?, busy? }`                                      |
-| `presence-changed` | relay → 同账号在线设备广播 | 单设备 presence 快照(`PresenceSnapshot`)                                                 |
-| `ping` / `pong`    | client ↔ relay             | 应用层心跳(20s),relay 借 ping 刷新 `lastSeenAt` / 路由 TTL                               |
+| kind               | 方向                       | 用途                                                                                       |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------------------------ |
+| `hello`            | client → relay             | 上线注册:`{ deviceName, platform, appVersion, remoteControlEnabled, busy, deviceInfo? }`   |
+| `hello-ack`        | relay → client             | 注册应答:`{ serverProtocolVersion, deviceId, userId, capabilities? }`                      |
+| `presence-set`     | client → relay             | 部分更新自身状态:`{ remoteControlEnabled?, busy? }`                                        |
+| `presence-changed` | relay → 同账号在线设备广播 | 单设备 presence 快照(`PresenceSnapshot`)                                                   |
+| `ping` / `pong`    | client ↔ relay             | 应用层心跳(20s),relay 借 ping 刷新 `lastSeenAt` / 路由 TTL                                 |
 | `notify`           | client → relay             | 请求 relay 给本账号已注册推送 token 的移动设备发系统推送(`NotifyPayload`,relay 消费不转发) |
 
 **`notify` 的能力协商(capability gate)**:老 relay 对未知 kind 静默丢弃(§9),`notify` 又是 fire-and-forget(成功无响应),发送方无法靠超时区分「已推送」与「黑洞」。因此 relay 在 `hello-ack.capabilities` 中声明 `'notify'`(常量 `SERVER_CAPABILITY_NOTIFY`),客户端**只有看到该声明才允许发送** `notify` 帧;`capabilities` 缺省(老 relay)= 空集 = 不发。失败路径回 `relay-error`:`RATE_LIMITED`(频控)/ `BAD_REQUEST`(payload 非法或字段超限,上限见 `NOTIFY_*_MAX_LENGTH` 常量)/ `INTERNAL`。推送 token 的注册/注销走 relay 的 REST 面(客户端 ↔ relay server 的接口契约,不在本包)。
@@ -91,15 +91,15 @@ CONTROL_KINDS = { link-open, invoke }
 
 ## 6. 错误码(`RelayErrorCode`,relay 自身产生)
 
-| code                | 含义                           |
-| ------------------- | ------------------------------ |
-| `DEVICE_OFFLINE`    | 目标设备不在线,或不属于本账号  |
-| `REMOTE_DISABLED`   | 目标设备「允许被控」开关关闭   |
-| `VERSION_MISMATCH`  | 协议版本不一致                 |
-| `PAYLOAD_TOO_LARGE` | 单帧超限(见 `MAX_FRAME_BYTES`) |
+| code                | 含义                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `DEVICE_OFFLINE`    | 目标设备不在线,或不属于本账号                                                                        |
+| `REMOTE_DISABLED`   | 目标设备「允许被控」开关关闭                                                                         |
+| `VERSION_MISMATCH`  | 协议版本不一致                                                                                       |
+| `PAYLOAD_TOO_LARGE` | 单帧超限(见 `MAX_FRAME_BYTES`)                                                                       |
 | `RATE_LIMITED`      | `notify` 频控命中。只有声明了 `notify` capability 的 relay 会产生;旧客户端不发 `notify`,不会收到本码 |
-| `BAD_REQUEST`       | 帧格式非法                     |
-| `INTERNAL`          | 中继内部错误                   |
+| `BAD_REQUEST`       | 帧格式非法                                                                                           |
+| `INTERNAL`          | 中继内部错误                                                                                         |
 
 客户端包的 `DeviceLinkErrorCode` 是本集合的超集(追加客户端本地码);relay 产生的码必须与本集合保持一致。
 
