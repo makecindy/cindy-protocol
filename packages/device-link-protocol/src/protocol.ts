@@ -28,11 +28,12 @@ export const WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 export type EnvelopeKind =
   // —— 连接层(client ↔ server)——
   | 'hello' // client→server: 上线注册 { deviceName, platform, appVersion, remoteControlEnabled, busy, deviceInfo? }
-  | 'hello-ack' // server→client: { serverProtocolVersion, deviceId, userId }
+  | 'hello-ack' // server→client: { serverProtocolVersion, deviceId, userId, capabilities? }
   | 'presence-set' // client→server: 部分更新 { remoteControlEnabled?, busy? }
   | 'presence-changed' // server→同账号在线设备广播: 单设备 presence 快照
   | 'ping' // client→server: 应用层心跳(20s),server 借此刷 lastSeenAt / route TTL
   | 'pong' // server→client
+  | 'notify' // client→server: 请求给本账号已注册推送 token 的移动设备发系统推送(server 消费,不转发)
   // —— 隧道层(controller ↔ target,server 只转发)——
   | 'link-open'
   | 'link-accept'
@@ -83,6 +84,7 @@ export type RelayErrorCode =
   | 'REMOTE_DISABLED' // 目标设备「允许被控」开关关闭
   | 'VERSION_MISMATCH' // 协议版本不一致
   | 'PAYLOAD_TOO_LARGE' // 单帧超限
+  | 'RATE_LIMITED' // notify 频控命中。只会发给已声明 notify capability 的 server 的对话方——旧客户端不发 notify,不会收到本码
   | 'BAD_REQUEST' // 帧格式非法
   | 'INTERNAL'; // 中继内部错误
 
@@ -110,12 +112,53 @@ export interface HelloAckPayload {
   serverProtocolVersion: number;
   deviceId: string;
   userId: string;
+  /**
+   * server 支持的可选能力集(append-only)。旧 server 缺省 = 空集;
+   * 客户端只有在能力集包含对应项时才发起该能力的帧(如 'notify'),
+   * 避免旧 server 对未知 kind 静默丢弃造成黑洞。
+   */
+  capabilities?: string[];
 }
+
+/** hello-ack.capabilities:server 支持 notify 帧(移动推送)。 */
+export const SERVER_CAPABILITY_NOTIFY = 'notify';
 
 /** presence-set 帧 payload(client→server,部分更新) */
 export interface PresenceSetPayload {
   remoteControlEnabled?: boolean;
   busy?: boolean;
+}
+
+// ─── notify(移动推送)────────────────────────────────────────────────────────
+
+/** notify 事件类别(会话终态语义,与桌面通知的 kind 对齐)。 */
+export type NotifyCategory = 'session-done' | 'session-error' | 'session-needs-reply';
+
+/** notify payload 的字段长度上限(server 超限即整帧 BAD_REQUEST,不静默截断)。 */
+export const NOTIFY_TITLE_MAX_LENGTH = 120;
+export const NOTIFY_BODY_MAX_LENGTH = 240;
+export const NOTIFY_DEEP_LINK_MAX_LENGTH = 512;
+export const NOTIFY_COLLAPSE_ID_MAX_LENGTH = 128;
+
+/**
+ * notify 帧 payload(client→server;server 消费,不转发)。
+ * server 查本账号已注册的推送 token(排除发送方自己),经 APNs/FCM 下发系统推送。
+ * 发送门槛:hello-ack.capabilities 含 SERVER_CAPABILITY_NOTIFY 才可发;
+ * 旧 server 收到未知 kind 会静默丢弃(黑洞),没有该能力声明时客户端不得发送。
+ * fire-and-forget:成功无响应;失败回 relay-error(RATE_LIMITED / BAD_REQUEST / INTERNAL)。
+ */
+export interface NotifyPayload {
+  category: NotifyCategory;
+  /** 通知标题(建议:会话标题)。只放标题与终态,不放消息内容(经第三方推送通道)。 */
+  title: string;
+  /** 通知正文(终态描述),可缺省 */
+  body?: string;
+  /** 点击通知的跳转深链,如 cindy://devices/<deviceId>/sessions/<sessionId> */
+  deepLink: string;
+  /** 系统层合并键(APNs collapse-id / thread-id):同键新通知顶替旧通知 */
+  collapseId: string;
+  /** 只推给指定设备;缺省 = 本账号全部已注册推送 token 的设备(不含发送方) */
+  targetDeviceId?: string;
 }
 
 /** 设备识别用的轻量硬件 / 系统信息。所有字段 best-effort,可缺省。 */
