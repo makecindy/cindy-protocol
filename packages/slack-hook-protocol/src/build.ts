@@ -33,6 +33,14 @@ import {
   type HookPrefsGetMessage,
   type HookPrefsSetMessage,
   type HookPrefsStateMessage,
+  type HookProviderBindCancelMessage,
+  type HookProviderBindRevokeMessage,
+  type HookProviderBindStartMessage,
+  type HookProviderBindStateMessage,
+  type HookProviderBindUpdateMessage,
+  type HookProviderPrefsGetMessage,
+  type HookProviderPrefsSetMessage,
+  type HookProviderPrefsStateMessage,
   type HookQueryRequestMessage,
   type HookQueryResponseMessage,
   type HookSessionArchiveMessage,
@@ -50,6 +58,14 @@ import {
   type PrefsGetPayload,
   type PrefsSetPayload,
   type PrefsStatePayload,
+  type ProviderBindCancelPayload,
+  type ProviderBindRevokePayload,
+  type ProviderBindStartPayload,
+  type ProviderBindStatePayload,
+  type ProviderBindUpdatePayload,
+  type ProviderPrefsGetPayload,
+  type ProviderPrefsSetPayload,
+  type ProviderPrefsStatePayload,
   type QueryRequestPayload,
   type QueryResponsePayload,
   type SessionArchivePayload,
@@ -139,6 +155,36 @@ export function makeBindState(payload: BindStatePayload): HookBindStateMessage {
   return envelope('bind.state', payload);
 }
 
+export function makeProviderBindStart(
+  payload: ProviderBindStartPayload,
+): HookProviderBindStartMessage {
+  return envelope('provider.bind.start', payload);
+}
+
+export function makeProviderBindCancel(
+  payload: ProviderBindCancelPayload,
+): HookProviderBindCancelMessage {
+  return envelope('provider.bind.cancel', payload);
+}
+
+export function makeProviderBindRevoke(
+  payload: ProviderBindRevokePayload,
+): HookProviderBindRevokeMessage {
+  return envelope('provider.bind.revoke', payload);
+}
+
+export function makeProviderBindUpdate(
+  payload: ProviderBindUpdatePayload,
+): HookProviderBindUpdateMessage {
+  return envelope('provider.bind.update', payload);
+}
+
+export function makeProviderBindState(
+  payload: ProviderBindStatePayload,
+): HookProviderBindStateMessage {
+  return envelope('provider.bind.state', payload);
+}
+
 export function makeQueryRequest(payload: QueryRequestPayload): HookQueryRequestMessage {
   return envelope('query.request', payload);
 }
@@ -183,6 +229,24 @@ export function makePrefsSet(payload: PrefsSetPayload): HookPrefsSetMessage {
 
 export function makePrefsState(payload: PrefsStatePayload): HookPrefsStateMessage {
   return envelope('prefs.state', payload);
+}
+
+export function makeProviderPrefsGet(
+  payload: ProviderPrefsGetPayload,
+): HookProviderPrefsGetMessage {
+  return envelope('provider.prefs.get', payload);
+}
+
+export function makeProviderPrefsSet(
+  payload: ProviderPrefsSetPayload,
+): HookProviderPrefsSetMessage {
+  return envelope('provider.prefs.set', payload);
+}
+
+export function makeProviderPrefsState(
+  payload: ProviderPrefsStatePayload,
+): HookProviderPrefsStateMessage {
+  return envelope('provider.prefs.state', payload);
 }
 
 export function makeToolRequest(payload: ToolRequestPayload): HookToolRequestMessage {

@@ -122,6 +122,11 @@ export const HOOK_MESSAGE_TYPES = [
   'bind.start',
   'bind.update',
   'bind.revoke',
+  'provider.bind.start',
+  'provider.bind.cancel',
+  'provider.bind.revoke',
+  'provider.bind.update',
+  'provider.bind.state',
   'query.request',
   'query.response',
   'task.cancel',
@@ -132,6 +137,9 @@ export const HOOK_MESSAGE_TYPES = [
   'prefs.get',
   'prefs.set',
   'prefs.state',
+  'provider.prefs.get',
+  'provider.prefs.set',
+  'provider.prefs.state',
   'tool.request',
   'tool.response',
   'bind.state',
@@ -514,10 +522,98 @@ export interface BindStatePayload {
   bindings: BindStateEntry[];
 }
 
+// ── Provider-neutral binding (append-only v1) ───────────────────────────────
+
+/** IM providers supported by the shared Cindy relay. */
+export const HOOK_PROVIDERS = ['slack', 'telegram'] as const;
+export type HookProvider = (typeof HOOK_PROVIDERS)[number];
+
+/**
+ * Provider binding states. A binding attempt moves monotonically from pending
+ * through optional confirmation to confirmed, or one of the terminal states.
+ */
+export const PROVIDER_BIND_STATES = [
+  'none',
+  'pending',
+  'awaiting_confirmation',
+  'confirmed',
+  'denied',
+  'expired',
+  'failed',
+  'revoked',
+  'superseded',
+] as const;
+export type ProviderBindState = (typeof PROVIDER_BIND_STATES)[number];
+
+/** Known UI action hints. The wire remains open; consumers ignore unknown values. */
+export const PROVIDER_BIND_ACTIONS = [
+  'open_connect_url',
+  'copy_connect_url',
+  'cancel',
+  'retry',
+  'revoke',
+  'open_provider',
+  'add_to_group',
+] as const;
+export type KnownProviderBindAction = (typeof PROVIDER_BIND_ACTIONS)[number];
+export type ProviderBindAction = string;
+
+/** Start a provider-specific, one-time binding attempt for this device. */
+export interface ProviderBindStartPayload {
+  requestId: string;
+  provider: HookProvider;
+  /** Optional provider scope (for example a Slack team or Telegram bot id). */
+  scopeId?: string | null;
+}
+
+/** Cancel exactly one in-flight binding attempt without touching a binding. */
+export interface ProviderBindCancelPayload {
+  requestId: string;
+  provider: HookProvider;
+  attemptId: string;
+}
+
+/** Revoke exactly one confirmed binding. */
+export interface ProviderBindRevokePayload {
+  requestId: string;
+  provider: HookProvider;
+  bindingId: string;
+}
+
+/**
+ * Shared payload for provider.bind.update and provider.bind.state. update is an
+ * event/reply; state is an authoritative point-in-time snapshot for one scope.
+ * All nullable fields are explicit so an old value cannot survive a snapshot.
+ */
+export interface ProviderBindStatusPayload {
+  provider: HookProvider;
+  /** Request id being answered, or null for an unsolicited state push. */
+  replyTo: string | null;
+  state: ProviderBindState;
+  attemptId: string | null;
+  bindingId: string | null;
+  principalId: string | null;
+  principalName: string | null;
+  scopeId: string | null;
+  scopeName: string | null;
+  /** One-time provider deep link; present only while state=pending. */
+  connectUrl: string | null;
+  /** Unix milliseconds; required for pending/awaiting_confirmation attempts. */
+  expiresAt: number | null;
+  /** Stable machine-readable reason; required for unsuccessful terminal states. */
+  reason: string | null;
+  /** Optional safe recovery/provider URL interpreted by the host application. */
+  remediationUrl: string | null;
+  actions: ProviderBindAction[];
+}
+
+export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
+export type ProviderBindStatePayload = ProviderBindStatusPayload;
+
 // ── 阶段 6(v2): 实时问答 ────────────────────────────────────────────────────
 
 /** 可查询的清单种类。 */
-export const QUERY_KINDS = ['workspaces', 'models'] as const;
+export const QUERY_KINDS = ['workspaces', 'models', 'sessions'] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -563,6 +659,16 @@ export interface QueryAgentModels {
   permissionModes?: QueryPermissionModeEntry[];
 }
 
+/** Privacy-minimised recent-session entry for the provider session picker. */
+export interface QuerySessionEntry {
+  id: string;
+  title: string;
+  /** Workspace alias only; local absolute paths are forbidden on this wire. */
+  workspace: string;
+  /** Unix milliseconds of the latest local activity. */
+  lastActiveAt: number;
+}
+
 /**
  * query.response(desktop -> server): 问答应答。
  * ok=false 时 error 非空(desktop 侧取清单失败); ok=true 时按 kind 携带
@@ -577,6 +683,8 @@ export interface QueryResponsePayload {
   workspaces?: string[];
   /** kind=models 且 ok 时必填: 按 agent 分组的可用模型与 effort 档位。 */
   agents?: QueryAgentModels[];
+  /** kind=sessions 且 ok 时必填: at most 20 privacy-minimised entries. */
+  sessions?: QuerySessionEntry[];
 }
 
 // ── 阶段 7(v2): 任务取消 ────────────────────────────────────────────────────
@@ -714,6 +822,43 @@ export interface PrefsStatePayload {
   prefs: WorkspacePrefsEntry[];
 }
 
+// ── Provider-neutral preferences (append-only v1) ──────────────────────────
+
+/** Provider preference selector; exactly one of bindingId/scopeId is non-null. */
+export interface ProviderPrefsSelector {
+  provider: HookProvider;
+  bindingId: string | null;
+  scopeId: string | null;
+}
+
+export interface ProviderPrefsGetPayload extends ProviderPrefsSelector {
+  requestId: string;
+}
+
+export interface ProviderPrefsSetPayload extends ProviderPrefsSelector {
+  requestId: string;
+  workspace: string;
+  model?: string | null;
+  effort?: string | null;
+  agentKind?: string | null;
+  permissionMode?: string | null;
+}
+
+/** Provider-neutral preference row (intentionally has no Slack teamId field). */
+export interface ProviderWorkspacePrefsEntry {
+  workspace: string;
+  model: string | null;
+  effort: string | null;
+  agentKind: string | null;
+  permissionMode: string | null;
+}
+
+export interface ProviderPrefsStatePayload extends ProviderPrefsSelector {
+  replyTo: string | null;
+  bound: boolean;
+  prefs: ProviderWorkspacePrefsEntry[];
+}
+
 // ── 阶段 12(v2): Slack 网关工具 ────────────────────────────────────────────
 
 /**
@@ -729,6 +874,18 @@ export const HOOK_FEATURE_SLACK_TOOLS = 'slack-tools';
  * welcome.features 声明支持。任一侧缺席回落单绑定行为。
  */
 export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
+
+/** Both peers must advertise this before using provider.bind.* frames. */
+export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+
+/** Both peers must advertise this before using provider.prefs.* frames. */
+export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';
+
+/** Both peers must advertise this before query.kind=sessions is used. */
+export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
+
+/** Server capability announcing that its provider registry enables Telegram. */
+export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
 
 /**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
@@ -819,6 +976,38 @@ export type HookPrefsStateMessage = HookEnvelope<'prefs.state', PrefsStatePayloa
 export type HookToolRequestMessage = HookEnvelope<'tool.request', ToolRequestPayload>;
 export type HookToolResponseMessage = HookEnvelope<'tool.response', ToolResponsePayload>;
 export type HookBindStateMessage = HookEnvelope<'bind.state', BindStatePayload>;
+export type HookProviderBindStartMessage = HookEnvelope<
+  'provider.bind.start',
+  ProviderBindStartPayload
+>;
+export type HookProviderBindCancelMessage = HookEnvelope<
+  'provider.bind.cancel',
+  ProviderBindCancelPayload
+>;
+export type HookProviderBindRevokeMessage = HookEnvelope<
+  'provider.bind.revoke',
+  ProviderBindRevokePayload
+>;
+export type HookProviderBindUpdateMessage = HookEnvelope<
+  'provider.bind.update',
+  ProviderBindUpdatePayload
+>;
+export type HookProviderBindStateMessage = HookEnvelope<
+  'provider.bind.state',
+  ProviderBindStatePayload
+>;
+export type HookProviderPrefsGetMessage = HookEnvelope<
+  'provider.prefs.get',
+  ProviderPrefsGetPayload
+>;
+export type HookProviderPrefsSetMessage = HookEnvelope<
+  'provider.prefs.set',
+  ProviderPrefsSetPayload
+>;
+export type HookProviderPrefsStateMessage = HookEnvelope<
+  'provider.prefs.state',
+  ProviderPrefsStatePayload
+>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -845,7 +1034,15 @@ export type HookMessage =
   | HookPrefsStateMessage
   | HookToolRequestMessage
   | HookToolResponseMessage
-  | HookBindStateMessage;
+  | HookBindStateMessage
+  | HookProviderBindStartMessage
+  | HookProviderBindCancelMessage
+  | HookProviderBindRevokeMessage
+  | HookProviderBindUpdateMessage
+  | HookProviderBindStateMessage
+  | HookProviderPrefsGetMessage
+  | HookProviderPrefsSetMessage
+  | HookProviderPrefsStateMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };

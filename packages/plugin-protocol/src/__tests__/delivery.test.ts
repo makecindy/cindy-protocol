@@ -31,7 +31,7 @@ describe('plugin delivery contract', () => {
           name: validManifest.name,
           description: null,
           author: null,
-          scope: 'global',
+          scope: 'public',
           organizationId: null,
           defaultInstall: true,
           currentRelease: {
@@ -59,7 +59,7 @@ describe('plugin delivery contract', () => {
         name: validManifest.name,
         description: null,
         author: null,
-        scope: 'global',
+        scope: 'public',
         organizationId: null,
         defaultInstall: true,
         currentRelease: {
@@ -101,6 +101,76 @@ describe('plugin delivery contract', () => {
     });
     expect(response.plugins).toHaveLength(1);
     expect(response.plugins[0]?.defaultInstall).toBe(false);
+  });
+
+  it('parses a personal Plugin without exposing its owner identity', () => {
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [
+        {
+          id: pluginId,
+          ghostId: validManifest.id,
+          name: validManifest.name,
+          description: null,
+          author: null,
+          scope: 'personal',
+          organizationId: null,
+          ownerPassportId: 'passport-example',
+          defaultInstall: false,
+          currentRelease: {
+            id: 'release-1',
+            version: validManifest.version,
+            sha256: 'b'.repeat(64),
+            sizeBytes: 1024,
+            publishedAt: '2026-07-19T00:00:00.000Z',
+          },
+        },
+      ],
+      nextCursor: null,
+    });
+    expect(response.plugins[0]?.scope).toBe('personal');
+    expect(response.plugins[0]?.organizationId).toBeNull();
+    expect(response.plugins[0]).not.toHaveProperty('ownerPassportId');
+  });
+
+  it('rejects organization ownership metadata that disagrees with scope', () => {
+    const plugin = {
+      id: pluginId,
+      ghostId: validManifest.id,
+      name: validManifest.name,
+      description: null,
+      author: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-1',
+        version: validManifest.version,
+        sha256: 'b'.repeat(64),
+        sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z',
+      },
+    };
+
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [{ ...plugin, scope: 'public', organizationId: 'org-1' }],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [{ ...plugin, scope: 'personal', organizationId: 'org-1' }],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [{ ...plugin, scope: 'organization', organizationId: null }],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
   });
 
   it('parses the signed download response used by staging installation', () => {
@@ -153,7 +223,7 @@ describe('plugin delivery contract', () => {
           name: validManifest.name,
           description: null,
           author: null,
-          scope: 'global',
+          scope: 'public',
           organizationId: null,
           defaultInstall: true,
           currentRelease: {
@@ -179,7 +249,7 @@ describe('plugin delivery contract', () => {
           name: 'Stale name',
           description: null,
           author: null,
-          scope: 'global',
+          scope: 'public',
           organizationId: null,
           defaultInstall: true,
           currentRelease: {

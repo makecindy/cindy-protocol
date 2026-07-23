@@ -1,7 +1,7 @@
 # slack-hook-protocol — hook server ↔ desktop 双工任务协议
 
 > 包:`@cindy/slack-hook-protocol` · 协议版本 `HOOK_PROTOCOL_VERSION = 1` · 传输:WebSocket 文本帧(JSON)
-> 两端:**desktop**(客户端,发起连接)与 **hook server**(外部渠道接入服务,当前渠道为 Slack)。
+> 两端:**desktop**(客户端,发起连接)与 **hook server**(外部渠道接入服务,当前渠道为 Slack 与协商启用的 Telegram)。包名本版保留以避免消费方迁移风险。
 
 ## 1. 协议模型(四幕 + v2 增量)
 
@@ -23,6 +23,8 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 11. **偏好**:`prefs.get` / `prefs.set` / `prefs.state` —— server 侧目录偏好(agent/model/effort/permission)的远程读写
 12. **工具**:`tool.request` / `tool.response` —— desktop 会话内 agent 调用 server 侧 Slack 网关工具(server 以绑定用户托管的 user token 执行);能力协商靠 `welcome.features` 的 `HOOK_FEATURE_SLACK_TOOLS`
 13. **多 workspace 绑定(multi-team)**:`bind.state` 快照帧 + 各帧可选 `teamId` —— 一台设备可同时持有多个 (teamId, slackUserId) 绑定;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_MULTI_TEAM`),任一侧缺席回落单绑定行为
+14. **多 provider**:`provider.bind.*` / `provider.prefs.*` —— 在不改变 Slack 旧帧的前提下追加统一的 provider 绑定与偏好通道
+15. **最近会话**:`query.kind=sessions` —— Telegram `/session` 仅拉取最多 20 条脱敏会话摘要
 
 ## 2. 核心设计原则
 
@@ -31,6 +33,8 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 - **决策语义留在 desktop**:交互卡(阶段 10)中 server 是"哑渲染器"——渲染卡片、回传 `buttonId`,按钮到决策的映射、超时与安全默认全部由 desktop 持有。
 - **确定性靠代码不靠对端自觉**:两端收帧唯一入口是 `parseHookMessage`,手写校验、零依赖、坏帧返回 `ok:false` + 字段路径,绝不抛异常。
 - **sessionId 仅接管时指定**:普通流程 `task.dispatch.sessionId` 恒 null(按 externalKey 定位);非 null 表示接管已有桌面会话。ack / turn.end 中回传仅作记录,不参与路由。
+- **provider 能力必须双向协商**:只有 hello 与 welcome 同时包含 `provider-bind-v1` / `provider-prefs-v1` / `session-picker-v1` 时才可使用对应新增帧;Telegram 还要求 server 的 welcome 包含 `provider:telegram`。任一能力缺席都隐藏 Telegram 并完整回落现有 Slack 路径。
+- **provider 偏好隔离**:`provider.prefs.*` 用 `provider + bindingId/scopeId + workspace` 定位,不会读取或覆写旧 `prefs.*` 的 Slack 行。provider-neutral 条目刻意不含 `teamId`。
 
 ## 3. 信封与兼容策略
 
@@ -51,6 +55,7 @@ interface HookEnvelope<TType, TPayload> {
 - `v` 固定为 1,靠以下两条实现无版本号演进:
   - **type 是开放集合**:老端收到未知 `type` **丢帧不断连**。新消息类型天然向后兼容(功能降级但不致故障)。
   - **字段级宽容**:校验器只查已知字段,未知字段静默忽略(如 `turn.end.attachments` 对旧 server);新增可选字段的缺省行为必须定义(如 `bind.update.installUrl` 缺省回退通用链接)。
+- 本次只追加新消息类型、能力字符串和 `query.kind=sessions`;既有 `bind.*` / `prefs.*` 类型、字段与构造结果保持不变。老端会丢弃未知 provider 帧,新端在能力缺席时不会发送它们。
 - 帧上限 `HOOK_MAX_FRAME_CHARS = 48 MiB`(JSON 序列化后字符数)。纯防 OOM 的粗防御,取"能容纳几张聊天截图的 base64"的宽上限;附件精细限额由生产源头(provider)负责。
 
 ## 4. 可靠性语义
@@ -60,7 +65,7 @@ interface HookEnvelope<TType, TPayload> {
 - **latest-wins 帧**(`turn.progress` / `prefs.state` 主动推送):丢帧无害,每帧整体替换,不拼接不累积。
 - **幂等收口**:`task.cancel` 对未知 requestId、`session.archive` 对不存在的会话、`interaction.decision` 对已收口交互——全部静默忽略。
 
-## 5. 消息目录(24 种)
+## 5. 消息目录
 
 ### 阶段 1 连接与身份
 
@@ -91,10 +96,23 @@ interface HookEnvelope<TType, TPayload> {
 
 ### 阶段 6 实时问答
 
-| 消息             | 方向             | 用途 / 关键字段                                                                                                                                                            |
-| ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `query.request`  | server → desktop | 拉清单。`queryId`(server 生成,响应回传配对,server 自行超时)、`kind`:`workspaces / models`                                                                                  |
-| `query.response` | desktop → server | 应答。`ok=false` 时 `error` 非空;ok 时按 kind 携带 `workspaces` 或 `agents`(按 agent 分组:模型清单含 `efforts` 档位与 `group` 目录分组、`permissionModes` 缺席=旧版不支持) |
+| 消息             | 方向             | 用途 / 关键字段                                                                                                                                                                          |
+| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query.request`  | server → desktop | 拉清单。`queryId`(server 生成,响应回传配对,server 自行超时)、`kind`:`workspaces / models / sessions`                                                                                     |
+| `query.response` | desktop → server | 应答。`ok=false` 时 `error` 非空;ok 时按 kind 携带 `workspaces`、`agents` 或 `sessions`。sessions 最多 20 条 `{id,title,workspace,lastActiveAt}`,workspace 只能是别名,校验器拒绝绝对路径 |
+
+### Provider-neutral 绑定与偏好
+
+| 消息                                           | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provider.bind.start`                          | desktop → server | 按 provider 发起一次绑定尝试;`requestId` 配对,`scopeId` 可选                                                                                                                                                                                                                                                                                                                               |
+| `provider.bind.cancel`                         | desktop → server | 只取消指定 `attemptId`,不影响任何 confirmed binding                                                                                                                                                                                                                                                                                                                                        |
+| `provider.bind.revoke`                         | desktop → server | 只解除指定 `bindingId`                                                                                                                                                                                                                                                                                                                                                                     |
+| `provider.bind.update` / `provider.bind.state` | server → desktop | 共用完整快照形状。状态:`none → pending → awaiting_confirmation? → confirmed`;终态:`denied / expired / failed / revoked / superseded`。pending 必带 HTTPS `connectUrl`、attemptId、expiresAt;confirmed 必带 bindingId、principalId、scopeId;denied/expired/failed 必带机器可读 reason 并清空 binding/principal/expiry 字段;revoked/superseded 保留 bindingId 但必须清空 attemptId/expiresAt |
+| `provider.prefs.get` / `provider.prefs.set`    | desktop → server | 用 provider 与且仅一个 bindingId/scopeId 选择偏好域;set 再按 workspace alias 部分更新，校验器拒绝绝对路径                                                                                                                                                                                                                                                                                  |
+| `provider.prefs.state`                         | server → desktop | 同一偏好域的全量快照;`bound=false` 时 prefs 必为空，workspace 同样只允许 alias                                                                                                                                                                                                                                                                                                             |
+
+`actions` 是 UI 能力提示,当前值包括 `open_connect_url`、`copy_connect_url`、`cancel`、`retry`、`revoke`、`open_provider`、`add_to_group`;消费者必须忽略未来未知 action。链接仍需由 host 做 provider-specific allowlist 校验,例如 Telegram 客户端只接受严格的 `https://t.me/<bot>?start=<token>`。
 
 ### 阶段 8 会话归档
 
@@ -157,13 +175,13 @@ sequenceDiagram
 
 ## 8. 包 API
 
-| 导出                            | 说明                                                                                                                                                                                                                                                                                                                                |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parseHookMessage(raw)`         | 两端收帧唯一入口。接受 WS 文本帧或已 parse 的对象;返回 `{ok:true, message}` 或 `{ok:false, error}`(带字段路径),不抛异常                                                                                                                                                                                                             |
-| `isHookMessageType(v)`          | type 集合守卫                                                                                                                                                                                                                                                                                                                       |
-| `make*()` × 24                  | 每种消息的构造器(自动填 `v` / `id` / `ts`)                                                                                                                                                                                                                                                                                          |
-| `serializeHookMessage(message)` | 序列化为 WS 文本帧                                                                                                                                                                                                                                                                                                                  |
-| 常量                            | `HOOK_PROTOCOL_VERSION` / `HOOK_MAX_FRAME_CHARS` / `HOOK_MESSAGE_TYPES` / `TASK_ACK_RESULTS` / `TASK_REJECT_REASONS` / `TURN_END_STATUSES` / `BIND_UPDATE_STATES` / `QUERY_KINDS` / `MAX_INTERACTION_BUTTONS` / `SUPPORTED_IMAGE_MIME_TYPES` / `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_CHAT_WORKSPACE_ALIAS` |
+| 导出                            | 说明                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parseHookMessage(raw)`         | 两端收帧唯一入口。接受 WS 文本帧或已 parse 的对象;返回 `{ok:true, message}` 或 `{ok:false, error}`(带字段路径),不抛异常                                                                                                                                                                                                                                                                                     |
+| `isHookMessageType(v)`          | type 集合守卫                                                                                                                                                                                                                                                                                                                                                                                               |
+| `make*()`                       | 每种消息的构造器(自动填 `v` / `id` / `ts`)                                                                                                                                                                                                                                                                                                                                                                  |
+| `serializeHookMessage(message)` | 序列化为 WS 文本帧                                                                                                                                                                                                                                                                                                                                                                                          |
+| 常量                            | `HOOK_PROTOCOL_VERSION` / `HOOK_MAX_FRAME_CHARS` / `HOOK_MESSAGE_TYPES` / `HOOK_PROVIDERS` / `PROVIDER_BIND_STATES` / `HOOK_FEATURE_PROVIDER_*` / `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_CHAT_WORKSPACE_ALIAS` / `TASK_ACK_RESULTS` / `TASK_REJECT_REASONS` / `TURN_END_STATUSES` / `BIND_UPDATE_STATES` / `QUERY_KINDS` / `MAX_INTERACTION_BUTTONS` / `SUPPORTED_IMAGE_MIME_TYPES` |
 
 注:`build.ts` 使用 `node:crypto`,本包面向 Node 环境(desktop main 进程 / hook server),**不承诺 React Native 兼容**。
 

@@ -85,22 +85,22 @@ try {
 
 ## 字段语义
 
-| 字段             | 语义                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `Plugin.id`      | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。      |
-| `ghostId`        | `ghost.json.id`；同一来源内唯一，跨 Global 与 Organization 来源允许相同。                         |
-| `scope`          | `global` 对任意已登录 Cindy 身份可用；`organization` 只对 `organizationId` 对应组织可用。         |
-| `organizationId` | Global 恒为 `null`；Organization 必须是非空组织 ID。                                              |
-| `defaultInstall` | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。            |
-| `currentRelease` | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。 |
-| `nextCursor`     | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                |
+| 字段             | 语义                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `Plugin.id`      | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。           |
+| `ghostId`        | `ghost.json.id`；在同一 owner 内唯一，不同 Public、Organization、Personal owner 间允许相同。           |
+| `scope`          | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。 |
+| `organizationId` | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
+| `defaultInstall` | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
+| `currentRelease` | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
+| `nextCursor`     | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
 `parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
 
 ## 版本
 
 - Ghost manifest 当前只接受 `GHOST_MANIFEST_SCHEMA_VERSION=2`；
-- Plugin HTTP list/detail envelope 当前只接受 `PLUGIN_API_SCHEMA_VERSION=1`；
+- Plugin HTTP list/detail envelope 当前只接受 `PLUGIN_API_SCHEMA_VERSION=2`；v2 将 `global` 替换为 `public` 并新增 `personal`；
 - 两个版本号独立演进，不能相互替代。
 
 校验器对未知字段保持宽容，对已知字段和值严格校验。新增可选字段不要求服务端和 Desktop 同时发布；破坏性格式变化必须提升对应 schema version。
