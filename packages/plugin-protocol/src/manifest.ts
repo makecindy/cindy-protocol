@@ -38,6 +38,17 @@ function isWindowsReservedName(name: string): boolean {
  * plan/只读拒)、save 票据目录(主 agent 过户,复用 saveDeposit 预算)。
  * 字节永远由主机落盘,沙箱本身仍无 fs——本槽是"申请主机代写"的资格,
  * 不是文件系统访问权。
+ * 'session-context' = 会话上下文(2026-07-23):agent 派活(tool-call)时,主机把
+ * 当次会话的可信 {session_id, workdir, workdir_is_local} 注入 args.session_context。
+ * 只注入宿主认证过的事实,插件与 agent 自报的同名字段一律被剥除;远程工作区
+ * (workdir 不在本机)时 workdir_is_local=false,插件不得把它当本机路径用。
+ * 'pick' = 目录选择(2026-07-23):插件经管子申请主机弹**系统级**选文件夹窗口,
+ * 用户亲手选中即授权(与浏览器文件选择同一哲学:决定权在用户的点击上)。
+ * 返回票据(dir_deposit,同 ghost_call dir 通道);声明了 node 槽的插件额外
+ * 拿到绝对路径(Node 侧本就有用户级本机权限,路径保密无意义,可信才是重点)。
+ * 'preview' = 面板预览(2026-07-23):插件经管子申请在右侧栏内置浏览器里打开
+ * 一个网址标签页。网址范围装入时在 preview.hosts 白名单里定死(同 network
+ * 域名白名单语法),运行期主机逐次校验,范围外一律拒——防钓鱼是结构性的。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -45,9 +56,14 @@ export const GHOST_SLOTS = [
   'card',
   'panel',
   'cindy',
+  'agent',
+  'node',
   'network',
   'notify',
   'fs',
+  'session-context',
+  'pick',
+  'preview',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -98,6 +114,67 @@ export interface GhostToolDecl {
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
 }
+
+/**
+ * Card 槽能力详单。card 槽默认仅允许渲染静态/交互卡片(含按钮动作);
+ * externalLinks: true 额外允许卡片声明 data-ghost-link 外链,点击经宿主
+ * 确认框后 openExternal——这是独立加档权限,装入确认时单列。
+ */
+export interface GhostCardNeeds {
+  externalLinks?: boolean;
+}
+
+/**
+ * Agent 新回合能力详单。
+ *
+ * 申请 `agent` 槽默认只允许消费宿主在真实用户点击插件卡片时签发的
+ * 一次性通行票。`background: true` 额外允许插件在没有当次点击票据时,
+ * 对已经由用户建立过关联的会话发起回合;这是更高一档权限,安装时单列。
+ */
+export interface GhostAgentNeeds {
+  background?: boolean;
+}
+
+/** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
+export const GHOST_NODE_PROTOCOLS = ['json-rpc-stdio', 'mcp-stdio'] as const;
+export type GhostNodeProtocol = (typeof GHOST_NODE_PROTOCOLS)[number];
+
+/** Node 工作进程生命周期;常驻档会在安装确认中单列高风险权限。 */
+export const GHOST_NODE_LIFECYCLES = ['on-demand', 'resident'] as const;
+export type GhostNodeLifecycle = (typeof GHOST_NODE_LIFECYCLES)[number];
+
+/**
+ * 随插件安装的本地 Node 工作进程声明。
+ *
+ * 只允许指定包内入口和固定协议,不接受 command / args / shell / env,避免把
+ * ghost.json 变成任意命令启动器。Node 进程拥有当前系统用户级本机权限,主机
+ * 只保证它不能绕过 main.js 调 Cindy API,并不能把它变成系统级沙箱。
+ */
+export interface GhostNodeNeeds {
+  entry: string;
+  protocol: GhostNodeProtocol;
+  lifecycle?: GhostNodeLifecycle;
+  idleTimeoutSeconds?: number;
+  /**
+   * 额外工作进程入口(2026-07-23,能力 5 窄版):仍只能是包内申报过的 JS 文件,
+   * node-request 带 entry 字段指名调用;每个入口一个独立进程,协议/生命周期/
+   * 空闲策略与主入口共用同一份声明。不是任意命令执行——包外文件、未申报
+   * 入口一律拒。
+   */
+  entries?: string[];
+  /**
+   * 宿主代启子进程开关(2026-07-23,缺口 1):worker 可经引导层窄接口
+   * (spawnEntry)请求宿主再启动一个**已申报入口**(entry / entries 之内)的
+   * 原样 stdio 子进程,并把子进程 stdio 字节中继回 worker。给 Maker Runtime
+   * 这类"自己 spawn process.execPath"的库改道用——正式包关 RunAsNode,
+   * 那条路生出来的不是 Node。默认关;开了会在装入确认框单列一行。
+   * 权限本质不变:仍只能跑包内申报过的 JS,node 槽本就是用户级执行权。
+   */
+  childSpawn?: boolean;
+}
+
+/** node 额外入口条数上限(1 主 + 4 额外 = 每插件至多 5 个工作进程)。 */
+export const GHOST_NODE_MAX_EXTRA_ENTRIES = 4;
 
 /** cindy 槽·图像类可申请的动作(主机代办菜单的"图像"类目)。 */
 export const GHOST_MODEL_IMAGE_ACTIONS = ['generate', 'edit'] as const;
@@ -488,6 +565,26 @@ export const GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS: readonly string[] = [
   'content-type',
 ];
 
+/** preview 槽:可打开预览的域名模式条数上限(范围越小越好,同 network 精神)。 */
+export const GHOST_PREVIEW_MAX_HOSTS = 4;
+
+/**
+ * preview 槽详单(与 slots 含 'preview' 严格成对——有槽必有详单:范围是
+ * 本能力的全部知情面,不允许"先装后说")。hosts 语法与 network 域名白名单
+ * 一致(支持 `*.` 单层前缀通配),另特批 loopback 单段名(本地 dev server
+ * 是预览的正当主场,network 语法"至少两段"表达不了它)。装入确认框逐条展示。
+ */
+export interface GhostPreviewNeeds {
+  hosts: string[];
+}
+
+/** preview.hosts 特批的 loopback 主机名(network 域名语法之外唯一的例外)。 */
+export const GHOST_PREVIEW_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+]);
+
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
   /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
@@ -528,6 +625,10 @@ export interface GhostManifest {
   entry: string;
   /** 电子脑启动模式;缺省 = 'on-demand'(被需要才拉起)。 */
   launch?: GhostLaunchMode;
+  /** Agent 新回合能力详单;须与 slots 中的 `agent` 成对。 */
+  agent?: GhostAgentNeeds;
+  /** 随包本地 Node 工作进程详单;须与 slots 中的 `node` 成对(有槽必有详单)。 */
+  node?: GhostNodeNeeds;
   /**
    * 设置页「自定义设置区」界面入口(可选;安装目录内相对路径,意识自绘)。
    * 与面板同款沙箱 webview 渲染(零桥、分区断网、CSP 'self'),主题 token
@@ -543,6 +644,11 @@ export interface GhostManifest {
   settingsHeight?: number;
   /** 能力白名单(没声明的槽,运行时接口不存在)。 */
   slots: GhostSlot[];
+  /**
+   * card 槽能力详单(与 slots 含 'card' 成对;缺省 = 仅渲染,无外链)。
+   * externalLinks: true 时卡片内可声明 data-ghost-link,点击经宿主确认框后打开浏览器。
+   */
+  card?: GhostCardNeeds;
   /** 注册给 agent 的工具声明(与 slots 含 'tool' 成对)。 */
   tools?: GhostToolDecl[];
   /**
@@ -576,6 +682,11 @@ export interface GhostManifest {
   keywords?: string[];
   /** 面板声明;没有面板的意识(如纯工具意识)可省略。 */
   panel?: GhostPanelDecl;
+  /**
+   * preview 槽详单(与 slots 含 'preview' 严格成对):可在右侧栏内置浏览器
+   * 打开预览标签页的域名白名单。
+   */
+  preview?: GhostPreviewNeeds;
 }
 
 /** 判断值是否可作为 `ghost.json.id` 和跨平台安全的安装目录名。 */
@@ -749,7 +860,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       if (p.position === 'tab' && (p.minWidth !== undefined || p.defaultFraction !== undefined)) {
         return {
           ok: false,
-          reason: "panel.minWidth / panel.defaultFraction 仅停靠形态(left / right)有效,position:'tab' 时请移除",
+          reason:
+            "panel.minWidth / panel.defaultFraction 仅停靠形态(left / right)有效,position:'tab' 时请移除",
         };
       }
     }
@@ -814,6 +926,28 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (slots.includes('panel') && panel === undefined) {
     return { ok: false, reason: 'slots 声明了 "panel" 但缺少 panel(面板由意识自绘,html 必填)' };
+  }
+
+  // card 槽能力详单:缺省 = 仅渲染;externalLinks: true 是独立加档权限。
+  let card: GhostCardNeeds | undefined;
+  if (raw.card !== undefined) {
+    if (!isPlainObject(raw.card)) {
+      return { ok: false, reason: 'card 能力详单必须是对象(如 { "externalLinks": true })' };
+    }
+    if (!slots.includes('card')) {
+      return { ok: false, reason: '声明了 card 能力详单但 slots 未包含 "card"' };
+    }
+    const cardRaw = raw.card as Record<string, unknown>;
+    const unknownCardField = Object.keys(cardRaw).find((key) => key !== 'externalLinks');
+    if (unknownCardField) {
+      return { ok: false, reason: `card 含不允许的字段 ${JSON.stringify(unknownCardField)}` };
+    }
+    if (cardRaw.externalLinks !== undefined && typeof cardRaw.externalLinks !== 'boolean') {
+      return { ok: false, reason: 'card.externalLinks 必须是布尔值' };
+    }
+    if (cardRaw.externalLinks === true) {
+      card = { externalLinks: true };
+    }
   }
 
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
@@ -1744,6 +1878,196 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     };
   }
 
+  // agent 槽能力详单:缺省 = 仅点击票据;background: true 是更高一档权限。
+  let agent: GhostAgentNeeds | undefined;
+  if (raw.agent !== undefined) {
+    if (!isPlainObject(raw.agent)) {
+      return { ok: false, reason: 'agent 能力详单必须是对象(如 { "background": true })' };
+    }
+    if (!slots.includes('agent')) {
+      return { ok: false, reason: '声明了 agent 能力详单但 slots 未包含 "agent"' };
+    }
+    const agentRaw = raw.agent as Record<string, unknown>;
+    const unknownAgentField = Object.keys(agentRaw).find((key) => key !== 'background');
+    if (unknownAgentField) {
+      return {
+        ok: false,
+        reason: `agent 含不允许的字段 ${JSON.stringify(unknownAgentField)}`,
+      };
+    }
+    if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
+      return { ok: false, reason: 'agent.background 必须是布尔值' };
+    }
+    if (agentRaw.background !== true) {
+      return {
+        ok: false,
+        reason:
+          'agent 能力详单目前只有 background: true 这一项;仅需用户点击触发时请省略 agent 字段',
+      };
+    }
+    agent = { background: true };
+  }
+
+  // node 槽详单:只收包内入口 + 固定 stdio 协议 + 生命周期。这里刻意采用
+  // 字段白名单,command/args/shell/env 等任意命令启动面一律在装入前拒绝。
+  let node: GhostNodeNeeds | undefined;
+  if (raw.node !== undefined) {
+    if (!isPlainObject(raw.node)) {
+      return { ok: false, reason: 'node 能力详单必须是对象' };
+    }
+    if (!slots.includes('node')) {
+      return { ok: false, reason: '声明了 node 能力详单但 slots 未包含 "node"' };
+    }
+    const nodeRaw = raw.node as Record<string, unknown>;
+    const allowedNodeFields = new Set([
+      'entry',
+      'protocol',
+      'lifecycle',
+      'idleTimeoutSeconds',
+      'entries',
+      'childSpawn',
+    ]);
+    const unknownNodeField = Object.keys(nodeRaw).find((key) => !allowedNodeFields.has(key));
+    if (unknownNodeField) {
+      return {
+        ok: false,
+        reason: `node 含不允许的字段 ${JSON.stringify(unknownNodeField)};不能声明 command/args/shell/env`,
+      };
+    }
+    if (!isSafeGhostRelativePath(nodeRaw.entry)) {
+      return { ok: false, reason: 'node.entry 必须是安装目录内的安全相对路径' };
+    }
+    if (!/\.(?:c?js)$/.test(nodeRaw.entry)) {
+      return { ok: false, reason: 'node.entry 必须是 CommonJS .js / .cjs 文件' };
+    }
+    // 入口重合判定折叠大小写:Windows / macOS 默认文件系统大小写不敏感,
+    // main.js 与 Main.js 是同一个文件,原样比较会漏判。
+    if (nodeRaw.entry.toLowerCase() === (raw.entry as string).toLowerCase()) {
+      return { ok: false, reason: 'node.entry 不能与浏览器沙箱 entry 使用同一个文件' };
+    }
+    if (
+      typeof nodeRaw.protocol !== 'string' ||
+      !(GHOST_NODE_PROTOCOLS as readonly string[]).includes(nodeRaw.protocol)
+    ) {
+      return { ok: false, reason: `node.protocol 必须是 ${GHOST_NODE_PROTOCOLS.join(' / ')}` };
+    }
+    if (
+      nodeRaw.lifecycle !== undefined &&
+      (typeof nodeRaw.lifecycle !== 'string' ||
+        !(GHOST_NODE_LIFECYCLES as readonly string[]).includes(nodeRaw.lifecycle))
+    ) {
+      return { ok: false, reason: `node.lifecycle 必须是 ${GHOST_NODE_LIFECYCLES.join(' / ')}` };
+    }
+    if (
+      nodeRaw.idleTimeoutSeconds !== undefined &&
+      (typeof nodeRaw.idleTimeoutSeconds !== 'number' ||
+        !Number.isInteger(nodeRaw.idleTimeoutSeconds) ||
+        nodeRaw.idleTimeoutSeconds < 30 ||
+        nodeRaw.idleTimeoutSeconds > 3600)
+    ) {
+      return { ok: false, reason: 'node.idleTimeoutSeconds 必须是 30–3600 的整数' };
+    }
+    if (nodeRaw.lifecycle === 'resident' && nodeRaw.idleTimeoutSeconds !== undefined) {
+      return { ok: false, reason: 'node.lifecycle 为 resident 时不能再声明 idleTimeoutSeconds' };
+    }
+    // 额外入口(多进程窄版):同一套入口纪律——包内安全相对路径、CJS 文件、
+    // 不与浏览器沙箱 entry / 主入口 / 彼此重复;条数封顶。
+    let nodeEntries: string[] | undefined;
+    if (nodeRaw.entries !== undefined) {
+      if (!Array.isArray(nodeRaw.entries) || nodeRaw.entries.length === 0) {
+        return { ok: false, reason: 'node.entries 必须是非空数组(额外工作进程入口清单)' };
+      }
+      if (nodeRaw.entries.length > GHOST_NODE_MAX_EXTRA_ENTRIES) {
+        return { ok: false, reason: `node.entries 最多 ${GHOST_NODE_MAX_EXTRA_ENTRIES} 条` };
+      }
+      // 同上折叠大小写:大小写变体在大小写不敏感文件系统上是同一个文件,
+      // 不能被当作不同入口通过查重。
+      const seen = new Set<string>();
+      for (const extra of nodeRaw.entries) {
+        if (!isSafeGhostRelativePath(extra)) {
+          return { ok: false, reason: 'node.entries 每项必须是安装目录内的安全相对路径' };
+        }
+        if (!/\.(?:c?js)$/.test(extra)) {
+          return { ok: false, reason: 'node.entries 每项必须是 CommonJS .js / .cjs 文件' };
+        }
+        const extraFold = extra.toLowerCase();
+        if (extraFold === (raw.entry as string).toLowerCase()) {
+          return { ok: false, reason: 'node.entries 不能包含浏览器沙箱 entry' };
+        }
+        if (extraFold === nodeRaw.entry.toLowerCase()) {
+          return { ok: false, reason: 'node.entries 不能重复主入口 node.entry' };
+        }
+        if (seen.has(extraFold)) {
+          return { ok: false, reason: `node.entries 含重复入口 ${JSON.stringify(extra)}` };
+        }
+        seen.add(extraFold);
+      }
+      nodeEntries = nodeRaw.entries as string[];
+    }
+    if (nodeRaw.childSpawn !== undefined && typeof nodeRaw.childSpawn !== 'boolean') {
+      return { ok: false, reason: 'node.childSpawn 必须是布尔值' };
+    }
+    node = {
+      entry: nodeRaw.entry,
+      protocol: nodeRaw.protocol as GhostNodeProtocol,
+      ...(nodeRaw.lifecycle !== undefined
+        ? { lifecycle: nodeRaw.lifecycle as GhostNodeLifecycle }
+        : {}),
+      ...(nodeRaw.idleTimeoutSeconds !== undefined
+        ? { idleTimeoutSeconds: nodeRaw.idleTimeoutSeconds }
+        : {}),
+      ...(nodeEntries !== undefined ? { entries: nodeEntries } : {}),
+      ...(nodeRaw.childSpawn !== undefined ? { childSpawn: nodeRaw.childSpawn } : {}),
+    };
+  }
+  if (slots.includes('node') && node === undefined) {
+    return { ok: false, reason: 'slots 声明了 "node" 但缺少 node 工作进程详单' };
+  }
+
+  // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
+  // 范围是本能力的全部知情面,不允许"先装后说");域名语法与 network 白名单
+  // 同一套(装入确认框逐条展示)。
+  let preview: GhostPreviewNeeds | undefined;
+  if (raw.preview !== undefined) {
+    if (!isPlainObject(raw.preview)) {
+      return { ok: false, reason: 'preview 详单必须是对象(如 { "hosts": ["*.example.com"] })' };
+    }
+    if (!slots.includes('preview')) {
+      return { ok: false, reason: '声明了 preview 详单但 slots 未包含 "preview"' };
+    }
+    const previewRaw = raw.preview as Record<string, unknown>;
+    const unknownPreviewField = Object.keys(previewRaw).find((key) => key !== 'hosts');
+    if (unknownPreviewField !== undefined) {
+      return { ok: false, reason: `preview 含不允许的字段 ${JSON.stringify(unknownPreviewField)}` };
+    }
+    if (!Array.isArray(previewRaw.hosts) || previewRaw.hosts.length === 0) {
+      return { ok: false, reason: 'preview.hosts 必须是非空数组(可打开预览的域名白名单)' };
+    }
+    if (previewRaw.hosts.length > GHOST_PREVIEW_MAX_HOSTS) {
+      return { ok: false, reason: `preview.hosts 最多 ${GHOST_PREVIEW_MAX_HOSTS} 条` };
+    }
+    const seenPreviewHosts = new Set<string>();
+    for (const host of previewRaw.hosts) {
+      if (
+        !isValidGhostNetworkHostPattern(host) &&
+        !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
+      ) {
+        return { ok: false, reason: `preview.hosts 含不合法域名模式 ${JSON.stringify(host)}` };
+      }
+      if (seenPreviewHosts.has(host)) {
+        return { ok: false, reason: `preview.hosts 含重复域名 ${JSON.stringify(host)}` };
+      }
+      seenPreviewHosts.add(host);
+    }
+    preview = { hosts: previewRaw.hosts as string[] };
+  }
+  if (slots.includes('preview') && preview === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "preview" 但缺少 preview 详单(hosts 域名白名单必填)',
+    };
+  }
+
   // 显式触发指令:1–32 字符、无空白、无 '/'(允许中文,如 /画图);
   // 必须有工具可干活。跨意识查重在装入时由 GhostManager 执行(需要本地清单)。
   if (raw.command !== undefined) {
@@ -1802,9 +2126,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
+      ...(agent !== undefined ? { agent } : {}),
+      ...(node !== undefined ? { node } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       slots,
+      ...(card !== undefined ? { card } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
@@ -1812,6 +2139,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),
       ...(panel !== undefined ? { panel } : {}),
+      ...(preview !== undefined ? { preview } : {}),
     },
   };
 }

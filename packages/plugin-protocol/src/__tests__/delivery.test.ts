@@ -19,6 +19,13 @@ const validManifest = {
   tools: [{ name: 'help', description: 'Help with Acme tasks' }],
 } as const;
 const pluginId = `c${'p'.repeat(24)}`;
+const validIcon = {
+  mimeType: 'image/png',
+  sha256: 'c'.repeat(64),
+  sizeBytes: 2048,
+  url: 'https://cdn.example.com/plugin-icon.png?signature=example',
+  expiresAt: '2026-07-19T00:05:00.000Z',
+} as const;
 
 describe('plugin delivery contract', () => {
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
@@ -40,6 +47,7 @@ describe('plugin delivery contract', () => {
             sha256: 'a'.repeat(64),
             sizeBytes: 1024,
             publishedAt: '2026-07-19T00:00:00.000Z',
+            icon: validIcon,
           },
         },
       ],
@@ -47,7 +55,75 @@ describe('plugin delivery contract', () => {
     });
     expect(response.plugins[0]?.name).toBe(validManifest.name);
     expect(response.plugins[0]?.currentRelease.version).toBe(validManifest.version);
+    expect(response.plugins[0]?.currentRelease.icon).toEqual(validIcon);
     expect(response.nextCursor).toBe(pluginId);
+  });
+
+  it('accepts legacy v2 releases without icon metadata', () => {
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [
+        {
+          id: pluginId,
+          ghostId: validManifest.id,
+          name: validManifest.name,
+          description: null,
+          author: null,
+          scope: 'public',
+          organizationId: null,
+          defaultInstall: false,
+          currentRelease: {
+            id: 'release-legacy',
+            version: validManifest.version,
+            sha256: 'a'.repeat(64),
+            sizeBytes: 1024,
+            publishedAt: '2026-07-19T00:00:00.000Z',
+          },
+        },
+      ],
+      nextCursor: null,
+    });
+    expect(response.plugins[0]?.currentRelease.icon).toBeNull();
+  });
+
+  it('rejects non-HTTPS icon URLs and invalid icon hashes', () => {
+    const plugin = {
+      id: pluginId,
+      ghostId: validManifest.id,
+      name: validManifest.name,
+      description: null,
+      author: null,
+      scope: 'public',
+      organizationId: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-icon',
+        version: validManifest.version,
+        sha256: 'a'.repeat(64),
+        sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z',
+        icon: { ...validIcon, url: 'http://localhost:3391/icon.png' },
+      },
+    };
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [plugin],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [
+          {
+            ...plugin,
+            currentRelease: { ...plugin.currentRelease, icon: { ...validIcon, sha256: 'bad' } },
+          },
+        ],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
   });
 
   it('parses a visible Plugin detail and validates its manifest', () => {
