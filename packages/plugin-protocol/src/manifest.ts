@@ -1931,7 +1931,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (!/\.(?:c?js)$/.test(nodeRaw.entry)) {
       return { ok: false, reason: 'node.entry 必须是 CommonJS .js / .cjs 文件' };
     }
-    if (nodeRaw.entry === raw.entry) {
+    // 入口重合判定折叠大小写:Windows / macOS 默认文件系统大小写不敏感,
+    // main.js 与 Main.js 是同一个文件,原样比较会漏判。
+    if (nodeRaw.entry.toLowerCase() === (raw.entry as string).toLowerCase()) {
       return { ok: false, reason: 'node.entry 不能与浏览器沙箱 entry 使用同一个文件' };
     }
     if (
@@ -1969,6 +1971,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       if (nodeRaw.entries.length > GHOST_NODE_MAX_EXTRA_ENTRIES) {
         return { ok: false, reason: `node.entries 最多 ${GHOST_NODE_MAX_EXTRA_ENTRIES} 条` };
       }
+      // 同上折叠大小写:大小写变体在大小写不敏感文件系统上是同一个文件,
+      // 不能被当作不同入口通过查重。
       const seen = new Set<string>();
       for (const extra of nodeRaw.entries) {
         if (!isSafeGhostRelativePath(extra)) {
@@ -1977,16 +1981,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (!/\.(?:c?js)$/.test(extra)) {
           return { ok: false, reason: 'node.entries 每项必须是 CommonJS .js / .cjs 文件' };
         }
-        if (extra === raw.entry) {
+        const extraFold = extra.toLowerCase();
+        if (extraFold === (raw.entry as string).toLowerCase()) {
           return { ok: false, reason: 'node.entries 不能包含浏览器沙箱 entry' };
         }
-        if (extra === nodeRaw.entry) {
+        if (extraFold === nodeRaw.entry.toLowerCase()) {
           return { ok: false, reason: 'node.entries 不能重复主入口 node.entry' };
         }
-        if (seen.has(extra)) {
+        if (seen.has(extraFold)) {
           return { ok: false, reason: `node.entries 含重复入口 ${JSON.stringify(extra)}` };
         }
-        seen.add(extra);
+        seen.add(extraFold);
       }
       nodeEntries = nodeRaw.entries as string[];
     }

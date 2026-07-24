@@ -201,6 +201,21 @@ describe('Ghost manifest contract', () => {
     expect(
       withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/a.cjs'] }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+    // 大小写不敏感文件系统上的同名变体必须按同一个文件拒绝。
+    expect(withNode({ entry: 'Index.js', protocol: 'mcp-stdio' })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能与浏览器沙箱 entry'),
+    });
+    expect(
+      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/A.cjs'] }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+    expect(
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/b.cjs', 'node/B.cjs'],
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复入口') });
     expect(
       withNode({
         entry: 'node/a.cjs',
