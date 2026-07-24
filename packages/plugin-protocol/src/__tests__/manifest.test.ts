@@ -129,4 +129,156 @@ describe('Ghost manifest contract', () => {
     ]);
     expect(result.manifest).not.toHaveProperty('unknownField');
   });
+
+  it('accepts the taptap-maker style manifest with node/session-context/pick/preview slots', () => {
+    const result = validateGhostManifest({
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+      id: 'taptap-maker',
+      name: 'TapTap Maker',
+      version: '2.0.0',
+      author: 'Cindy',
+      icon: 'assets/icon.png',
+      entry: 'main.js',
+      settingsHtml: 'settings.html',
+      settingsHeight: 760,
+      slots: ['tool', 'card', 'node', 'session-context', 'pick', 'preview'],
+      card: { externalLinks: true },
+      node: {
+        entry: 'node/maker-mcp.cjs',
+        entries: ['node/account.cjs', 'node/maker-child.cjs'],
+        protocol: 'mcp-stdio',
+        lifecycle: 'on-demand',
+        idleTimeoutSeconds: 600,
+        childSpawn: true,
+      },
+      preview: { hosts: ['maker.taptap.cn'] },
+      command: 'taptap-maker',
+      tools: [{ name: 'maker_status', description: 'Check Maker status' }],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.slots).toEqual([
+      'tool',
+      'card',
+      'node',
+      'session-context',
+      'pick',
+      'preview',
+    ]);
+    expect(result.manifest.node).toEqual({
+      entry: 'node/maker-mcp.cjs',
+      protocol: 'mcp-stdio',
+      lifecycle: 'on-demand',
+      idleTimeoutSeconds: 600,
+      entries: ['node/account.cjs', 'node/maker-child.cjs'],
+      childSpawn: true,
+    });
+    expect(result.manifest.preview).toEqual({ hosts: ['maker.taptap.cn'] });
+    expect(result.manifest.card).toEqual({ externalLinks: true });
+  });
+
+  it('enforces node slot / detail pairing and entry discipline', () => {
+    const base = {
+      ...validManifest,
+      slots: ['tool', 'node'],
+    };
+    expect(validateGhostManifest(base)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('缺少 node 工作进程详单'),
+    });
+    const withNode = (node: Record<string, unknown>) => validateGhostManifest({ ...base, node });
+    expect(withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', command: 'sh' })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能声明 command/args/shell/env'),
+    });
+    expect(withNode({ entry: '../a.cjs', protocol: 'mcp-stdio' }).ok).toBe(false);
+    expect(withNode({ entry: 'index.js', protocol: 'mcp-stdio' })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能与浏览器沙箱 entry'),
+    });
+    expect(withNode({ entry: 'node/a.cjs', protocol: 'bash' }).ok).toBe(false);
+    expect(
+      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/a.cjs'] }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+    expect(
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/b.cjs', 'node/b.cjs'],
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复入口') });
+    expect(
+      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', childSpawn: 'yes' }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('childSpawn 必须是布尔值') });
+    expect(
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        lifecycle: 'resident',
+        idleTimeoutSeconds: 60,
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('resident 时不能再声明') });
+  });
+
+  it('enforces preview slot / hosts pairing and pattern rules', () => {
+    const base = { ...validManifest, slots: ['tool', 'preview'] };
+    expect(validateGhostManifest(base)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('缺少 preview 详单'),
+    });
+    expect(validateGhostManifest({ ...base, preview: { hosts: [] } }).ok).toBe(false);
+    expect(
+      validateGhostManifest({ ...base, preview: { hosts: ['https://x.example.com'] } }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        preview: { hosts: ['maker.taptap.cn', 'maker.taptap.cn'] },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复域名') });
+    expect(
+      validateGhostManifest({ ...validManifest, preview: { hosts: ['maker.taptap.cn'] } }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "preview"') });
+    const loopback = validateGhostManifest({
+      ...base,
+      preview: { hosts: ['localhost', '*.taptap.cn'] },
+    });
+    expect(loopback.ok).toBe(true);
+  });
+
+  it('validates card and agent capability details', () => {
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['tool', 'card'],
+        card: { externalLinks: 'yes' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({ ...validManifest, card: { externalLinks: true } }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "card"') });
+    const normalizedCard = validateGhostManifest({
+      ...validManifest,
+      slots: ['tool', 'card'],
+      card: { externalLinks: false },
+    });
+    expect(normalizedCard.ok).toBe(true);
+    if (normalizedCard.ok) expect(normalizedCard.manifest).not.toHaveProperty('card');
+
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['tool', 'agent'],
+        agent: { background: false },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('background: true') });
+    const backgroundAgent = validateGhostManifest({
+      ...validManifest,
+      slots: ['tool', 'agent'],
+      agent: { background: true },
+    });
+    expect(backgroundAgent.ok).toBe(true);
+    if (backgroundAgent.ok) expect(backgroundAgent.manifest.agent).toEqual({ background: true });
+  });
 });
