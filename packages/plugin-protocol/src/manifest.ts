@@ -62,24 +62,25 @@ export const GHOST_LAUNCH_MODES = ['on-demand', 'resident'] as const;
 export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 
 /**
- * 面板停靠位置(相对主聊天窗)。当前布局引擎支持 left / right;
- * top / bottom 需要嵌套上下分割(树操作/拖缝/卸载查找全链路),排期中——
- * 校验层先收词并明确拒绝,不静默降级(规则 9)。
+ * 面板显示形态(相对主聊天窗)。left / right = 顶层布局树停靠 pane;
+ * 'tab' = 不进布局树,作为右侧栏(right-tabs)里的每会话单例页签
+ * (2026-07-24 定案)。top / bottom 需要嵌套上下分割(树操作/拖缝/卸载
+ * 查找全链路),排期中——校验层先收词并明确拒绝,不静默降级(规则 9)。
  */
-export const GHOST_PANEL_POSITIONS = ['left', 'right'] as const;
+export const GHOST_PANEL_POSITIONS = ['left', 'right', 'tab'] as const;
 export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 
 /** 面板声明(卡槽之一,一段意识至多一块)。 */
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
-  /** 停靠位置(相对主聊天窗);缺省 = right(2026-07-12 定案)。 */
+  /** 显示形态:left / right 停靠,或 'tab' 右侧栏页签;缺省 = right(2026-07-12 定案)。 */
   position?: GhostPanelPosition;
   /** 面板界面入口(安装目录内相对路径,意识自绘,由主机面板容器渲染)。 */
   html: string;
-  /** 面板最小宽度(px),布局引擎拖缝时的下限。 */
+  /** 面板最小宽度(px),布局引擎拖缝时的下限。仅停靠形态有效,'tab' 时禁用。 */
   minWidth?: number;
-  /** 装入布局时的初始宽度占比(与 layoutTree 的 fraction 同语义)。 */
+  /** 装入布局时的初始宽度占比(与 layoutTree 的 fraction 同语义)。仅停靠形态有效,'tab' 时禁用。 */
   defaultFraction?: number;
 }
 
@@ -738,11 +739,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         // 收词但明确拒绝(规则 9 不静默降级):上下停靠等布局引擎嵌套分割就绪后开放。
         return {
           ok: false,
-          reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / right',
+          reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / right / tab',
         };
       }
       if (!(GHOST_PANEL_POSITIONS as readonly string[]).includes(p.position as string)) {
         return { ok: false, reason: `panel.position 必须是 ${GHOST_PANEL_POSITIONS.join(' / ')}` };
+      }
+      // 页签形态没有拖缝宽度语义:收词明确拒绝而非静默忽略(规则 9)。
+      if (p.position === 'tab' && (p.minWidth !== undefined || p.defaultFraction !== undefined)) {
+        return {
+          ok: false,
+          reason: "panel.minWidth / panel.defaultFraction 仅停靠形态(left / right)有效,position:'tab' 时请移除",
+        };
       }
     }
     panel = {
