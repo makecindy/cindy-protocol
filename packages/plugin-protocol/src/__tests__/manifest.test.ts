@@ -296,4 +296,28 @@ describe('Ghost manifest contract', () => {
     expect(backgroundAgent.ok).toBe(true);
     if (backgroundAgent.ok) expect(backgroundAgent.manifest.agent).toEqual({ background: true });
   });
+
+  it("panel.position 'tab' 合法;tab 时停靠专属字段(minWidth/defaultFraction)明确拒绝", () => {
+    const withPanel = (panel: Record<string, unknown>) => ({
+      ...validManifest,
+      slots: ['tool', 'panel'],
+      panel: { html: 'panel.html', ...panel },
+    });
+
+    const tab = validateGhostManifest(withPanel({ position: 'tab' }));
+    expect(tab.ok).toBe(true);
+    if (tab.ok) expect(tab.manifest.panel?.position).toBe('tab');
+
+    for (const extra of [{ minWidth: 240 }, { defaultFraction: 0.2 }]) {
+      const rejected = validateGhostManifest(withPanel({ position: 'tab', ...extra }));
+      expect(rejected.ok, JSON.stringify(extra)).toBe(false);
+      if (!rejected.ok) expect(rejected.reason).toContain('仅停靠形态');
+    }
+
+    // top/bottom 仍收词明确拒绝,野值仍拒。
+    const pending = validateGhostManifest(withPanel({ position: 'top' }));
+    expect(pending.ok).toBe(false);
+    if (!pending.ok) expect(pending.reason).toContain('暂未支持');
+    expect(validateGhostManifest(withPanel({ position: 'center' })).ok).toBe(false);
+  });
 });
