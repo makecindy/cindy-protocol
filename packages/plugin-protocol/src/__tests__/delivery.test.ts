@@ -62,23 +62,25 @@ describe('plugin delivery contract', () => {
   it('accepts legacy v2 releases without icon metadata', () => {
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,
-      plugins: [{
-        id: pluginId,
-        ghostId: validManifest.id,
-        name: validManifest.name,
-        description: null,
-        author: null,
-        scope: 'public',
-        organizationId: null,
-        defaultInstall: false,
-        currentRelease: {
-          id: 'release-legacy',
-          version: validManifest.version,
-          sha256: 'a'.repeat(64),
-          sizeBytes: 1024,
-          publishedAt: '2026-07-19T00:00:00.000Z',
+      plugins: [
+        {
+          id: pluginId,
+          ghostId: validManifest.id,
+          name: validManifest.name,
+          description: null,
+          author: null,
+          scope: 'public',
+          organizationId: null,
+          defaultInstall: false,
+          currentRelease: {
+            id: 'release-legacy',
+            version: validManifest.version,
+            sha256: 'a'.repeat(64),
+            sizeBytes: 1024,
+            publishedAt: '2026-07-19T00:00:00.000Z',
+          },
         },
-      }],
+      ],
       nextCursor: null,
     });
     expect(response.plugins[0]?.currentRelease.icon).toBeNull();
@@ -103,19 +105,25 @@ describe('plugin delivery contract', () => {
         icon: { ...validIcon, url: 'http://localhost:3391/icon.png' },
       },
     };
-    expect(() => parseListPluginsResponse({
-      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
-      plugins: [plugin],
-      nextCursor: null,
-    })).toThrow(PluginProtocolError);
-    expect(() => parseListPluginsResponse({
-      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
-      plugins: [{
-        ...plugin,
-        currentRelease: { ...plugin.currentRelease, icon: { ...validIcon, sha256: 'bad' } },
-      }],
-      nextCursor: null,
-    })).toThrow(PluginProtocolError);
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [plugin],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
+    expect(() =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [
+          {
+            ...plugin,
+            currentRelease: { ...plugin.currentRelease, icon: { ...validIcon, sha256: 'bad' } },
+          },
+        ],
+        nextCursor: null,
+      }),
+    ).toThrow(PluginProtocolError);
   });
 
   it('parses a visible Plugin detail and validates its manifest', () => {

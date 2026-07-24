@@ -99,16 +99,16 @@ try {
 
 ## 字段语义
 
-| 字段             | 语义                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| `Plugin.id`      | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。           |
-| `ghostId`        | `ghost.json.id`；在同一 owner 内唯一，不同 Public、Organization、Personal owner 间允许相同。           |
-| `scope`          | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。 |
-| `organizationId` | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
-| `defaultInstall` | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
-| `currentRelease` | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
-| `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。       |
-| `nextCursor`     | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
+| 字段                  | 语义                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `Plugin.id`           | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。           |
+| `ghostId`             | `ghost.json.id`；在同一 owner 内唯一，不同 Public、Organization、Personal owner 间允许相同。           |
+| `scope`               | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。 |
+| `organizationId`      | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
+| `defaultInstall`      | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
+| `currentRelease`      | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
+| `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。              |
+| `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
 `parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
 
