@@ -9,6 +9,20 @@ export const PLUGIN_SCOPES = ['public', 'organization', 'personal'] as const;
 /** `public` 对所有已登录身份可见；其余范围只对对应组织或自然人可见。 */
 export type PluginScope = (typeof PLUGIN_SCOPES)[number];
 
+/** 当前 Release 的可直接展示图标元数据；URL 为短期授权地址。 */
+export interface PluginIconMetadata {
+  /** 图标 MIME 类型，例如 image/png 或 image/svg+xml。 */
+  mimeType: string;
+  /** 图标对象的 SHA-256，固定为 64 位小写十六进制。 */
+  sha256: string;
+  /** 图标原始字节数，恒为正整数。 */
+  sizeBytes: number;
+  /** 短期 HTTPS 图标下载地址。 */
+  url: string;
+  /** 图标地址过期时间，格式为带毫秒的 UTC ISO 8601。 */
+  expiresAt: string;
+}
+
 /** 列表和详情共用的当前 Release 摘要。 */
 export interface PluginReleaseSummary {
   /** plugin-server 生成的 Release 资源 ID；调用方应将其视为不透明字符串。 */
@@ -21,6 +35,8 @@ export interface PluginReleaseSummary {
   sizeBytes: number;
   /** Release 发布时间，格式为带毫秒的 UTC ISO 8601。 */
   publishedAt: string;
+  /** 发布时从包内提取并单独存储的图标；未声明图标时为 null。 */
+  icon: PluginIconMetadata | null;
 }
 
 /** 详情响应中的当前 Release；在摘要基础上包含已校验的完整 manifest。 */
@@ -142,6 +158,41 @@ function isoDate(value: unknown, path: string): string {
   return text;
 }
 
+function parseIconMetadata(value: unknown, path: string): PluginIconMetadata | null {
+  // 老的 v2 服务端尚未提供 icon 字段时，客户端继续使用本地兜底图标。
+  if (value === null || value === undefined) return null;
+  const raw = object(value, path);
+  const mimeType = string(raw.mimeType, `${path}.mimeType`, 128);
+  if (!/^image\/[a-z0-9.+-]+$/i.test(mimeType)) {
+    throw new PluginProtocolError(`${path}.mimeType 必须是 image/* MIME 类型`);
+  }
+  const sha256 = string(raw.sha256, `${path}.sha256`, 64);
+  if (!/^[a-f0-9]{64}$/.test(sha256)) {
+    throw new PluginProtocolError(`${path}.sha256 必须是 64 位小写十六进制`);
+  }
+  if (
+    typeof raw.sizeBytes !== 'number' ||
+    !Number.isSafeInteger(raw.sizeBytes) ||
+    raw.sizeBytes <= 0
+  ) {
+    throw new PluginProtocolError(`${path}.sizeBytes 必须是正整数`);
+  }
+  const url = string(raw.url, `${path}.url`, 8192);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') throw new Error('unsupported protocol');
+  } catch {
+    throw new PluginProtocolError(`${path}.url 必须是 HTTPS URL`);
+  }
+  return {
+    mimeType,
+    sha256,
+    sizeBytes: raw.sizeBytes,
+    url,
+    expiresAt: isoDate(raw.expiresAt, `${path}.expiresAt`),
+  };
+}
+
 function parseReleaseSummary(value: unknown, path: string): PluginReleaseSummary {
   const raw = object(value, path);
   const version = string(raw.version, `${path}.version`, 32);
@@ -162,6 +213,7 @@ function parseReleaseSummary(value: unknown, path: string): PluginReleaseSummary
     sha256,
     sizeBytes: raw.sizeBytes,
     publishedAt: isoDate(raw.publishedAt, `${path}.publishedAt`),
+    icon: parseIconMetadata(raw.icon, `${path}.icon`),
   };
 }
 

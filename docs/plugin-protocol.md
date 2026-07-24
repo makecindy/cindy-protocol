@@ -67,6 +67,20 @@ const download = parsePluginDownloadResponse(await downloadResponse.json());
 - `parseGetPluginResponse`：解析单个 Plugin 详情及当前 Release 的完整 manifest；
 - `parsePluginDownloadResponse`：解析短期 HTTPS 下载地址及完整性元数据。
 
+当前 Release 摘要可带 `icon` 元数据。它描述发布时从 `.cindy` 包中安全提取并独立存储的图标，而不是包内相对路径：
+
+```ts
+interface PluginIconMetadata {
+  mimeType: string;
+  sha256: string;
+  sizeBytes: number;
+  url: string;
+  expiresAt: string;
+}
+```
+
+`icon` 为 `null` 表示 manifest 未声明图标，或服务端暂未提供图标对象。旧 v2 响应缺少该字段时解析器也规范化为 `null`，客户端应继续使用兜底图标；提供该字段时，URL 必须是短期 HTTPS 地址，MIME 必须为 `image/*`，并经过 SHA-256、大小和过期时间校验。
+
 三个解析器校验失败都会抛出 `PluginProtocolError`，错误消息包含出错字段路径，调用方应把它视为服务端响应不兼容或损坏，不应继续安装或切换 Release：
 
 ```ts
@@ -93,6 +107,7 @@ try {
 | `organizationId` | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
 | `defaultInstall` | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
 | `currentRelease` | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
+| `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。       |
 | `nextCursor`     | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
 `parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
