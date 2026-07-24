@@ -53,6 +53,38 @@ const manifest: GhostManifest = result.manifest;
 
 成功结果是只包含协议已知字段的规范化对象；`kind` 等有缺省语义的字段会被补齐。不要在校验前把 `unknown` 强转为 `GhostManifest`，也不要在服务端或 Desktop 另写一套 manifest 校验规则。
 
+### Node Worker 凭证绑定
+
+声明了 `node` 槽的插件可以通过 `node.secretBindings` 请求主机把用户凭证安全持久化，并仅在指定 Worker 入口和 JSON-RPC 方法同时命中时临时注入：
+
+```json
+{
+  "settingsHtml": "settings.html",
+  "slots": ["tool", "node"],
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio",
+    "secretBindings": [
+      {
+        "key": "mail_code",
+        "label": "Mail authorization code",
+        "methods": ["account/connect", "mail/action"],
+        "hint": "Use the provider-generated authorization code",
+        "url": "https://mail.example.com/settings"
+      }
+    ]
+  }
+}
+```
+
+- 每个插件最多声明 4 条绑定，每条最多绑定 16 个方法；`key` 与 `network.secrets`、`network.connections` 共用命名空间。
+- `settingsHtml` 必填，负责把凭证一次性写入宿主保险库；浏览器沙箱与 Agent 参数不得接触凭证明文。
+- `entry` 可省略，省略时仅绑定 `node.entry`；显式值必须逐字命中 `node.entry` 或 `node.entries`。
+- `mcp-stdio` 绑定不得占用宿主保留的 `initialize`、`notifications/initialized` 握手方法。
+- `url` 仅接受不含内嵌用户名或密码的 HTTPS 地址。
+
+这是 schema v2 的可选、追加字段，不改变未声明该字段的现有插件。旧版发布服务器会因严格的 `node` 字段白名单而拒绝包含该字段的包；因此发布顺序必须是协议仓合并、plugin-server 升级并部署，然后再发布使用该字段的插件。旧版客户端同样会拒绝安装而不会降级为不安全的明文传参。
+
 ## 解析客户端 HTTP 响应
 
 HTTP 返回体必须先作为 `unknown` 解析，再交给对应解析器：

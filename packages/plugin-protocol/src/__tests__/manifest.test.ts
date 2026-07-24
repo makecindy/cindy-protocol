@@ -236,6 +236,179 @@ describe('Ghost manifest contract', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('resident 时不能再声明') });
   });
 
+  it('accepts and normalizes method-scoped Node secret bindings', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      settingsHtml: 'settings.html',
+      slots: ['tool', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        entries: ['node/secondary.cjs'],
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: 'Mail authorization code',
+            methods: ['account/connect', 'mail/action'],
+            entry: 'node/secondary.cjs',
+            hint: 'Use the provider-generated authorization code',
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.node?.secretBindings).toEqual([
+      {
+        key: 'mail_code',
+        label: 'Mail authorization code',
+        methods: ['account/connect', 'mail/action'],
+        entry: 'node/secondary.cjs',
+        hint: 'Use the provider-generated authorization code',
+        url: 'https://mail.example.com/settings',
+      },
+    ]);
+  });
+
+  it('rejects unsafe Node secret bindings and shared credential-key collisions', () => {
+    const base = {
+      ...validManifest,
+      settingsHtml: 'settings.html',
+      slots: ['tool', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        entries: ['node/secondary.cjs'],
+        protocol: 'json-rpc-stdio',
+      },
+    };
+    const binding = {
+      key: 'mail_code',
+      label: 'Mail authorization code',
+      methods: ['mail/action'],
+    };
+
+    expect(
+      validateGhostManifest({
+        ...base,
+        settingsHtml: undefined,
+        node: { ...base.node, secretBindings: [binding] },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('需要 settingsHtml') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('安全方法名') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          protocol: 'mcp-stdio',
+          secretBindings: [{ ...binding, methods: ['initialize'] }],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('宿主保留的 MCP 方法') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ ...binding, methods: ['initialize'] }],
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          secretBindings: [{ ...binding, entry: 'node/other.cjs' }],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('逐字命中') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [binding, binding] },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 key') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'node', 'network'],
+        node: { ...base.node, secretBindings: [binding] },
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'mail_code',
+              label: 'Duplicate key',
+              inject: { header: 'Authorization', format: 'Bearer {value}' },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings 撞名') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'node', 'network'],
+        node: { ...base.node, secretBindings: [binding] },
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'mail_code',
+              label: 'Duplicate connection',
+              inject: { header: 'Authorization', format: 'Bearer {value}' },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings') });
+
+    for (const invalidBinding of [
+      { ...binding, key: 'Bad-Key' },
+      { ...binding, label: '' },
+      { ...binding, methods: [] },
+      { ...binding, methods: ['mail/action', 'mail/action'] },
+      { ...binding, hint: '' },
+      { ...binding, url: 'http://mail.example.com/settings' },
+      { ...binding, unexpected: true },
+    ]) {
+      expect(
+        validateGhostManifest({
+          ...base,
+          node: { ...base.node, secretBindings: [invalidBinding] },
+        }).ok,
+        JSON.stringify(invalidBinding),
+      ).toBe(false);
+    }
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [] },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('1–4 条') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          secretBindings: Array.from({ length: 5 }, (_, index) => ({
+            ...binding,
+            key: `mail_code_${index}`,
+          })),
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('1–4 条') });
+  });
+
   it('enforces preview slot / hosts pairing and pattern rules', () => {
     const base = { ...validManifest, slots: ['tool', 'preview'] };
     expect(validateGhostManifest(base)).toMatchObject({
