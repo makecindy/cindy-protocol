@@ -143,6 +143,40 @@ export type GhostNodeProtocol = (typeof GHOST_NODE_PROTOCOLS)[number];
 export const GHOST_NODE_LIFECYCLES = ['on-demand', 'resident'] as const;
 export type GhostNodeLifecycle = (typeof GHOST_NODE_LIFECYCLES)[number];
 
+/** 单插件最多可声明的 Node 凭证绑定数。 */
+export const GHOST_NODE_MAX_SECRET_BINDINGS = 4;
+/** 单条 Node 凭证最多可绑定的 JSON-RPC 方法数。 */
+export const GHOST_NODE_MAX_SECRET_METHODS = 16;
+const GHOST_NODE_MCP_RESERVED_METHODS = new Set(['initialize', 'notifications/initialized']);
+
+/** MCP 握手由宿主发起，插件业务请求与凭证绑定均不得占用这些方法。 */
+export function isGhostNodeMcpReservedMethod(method: string): boolean {
+  return GHOST_NODE_MCP_RESERVED_METHODS.has(method);
+}
+
+/**
+ * 主机保险库 → 随包 Node Worker 的按请求凭证绑定。
+ *
+ * 值由 settingsHtml 经 `/secrets` 一次性写入 safeStorage；浏览器沙箱
+ * main.js 不能直接从保险库读取明文。宿主仅在 method 与 entry 同时命中
+ * 本声明时，把值放进发往 Worker 的保留字段 `cindy.secrets[key]`；
+ * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
+ */
+export interface GhostNodeSecretBinding {
+  /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
+  key: string;
+  /** 给用户看的名称(安装确认与设置状态使用)。 */
+  label: string;
+  /** 允许注入的 JSON-RPC 方法白名单(1–16 条)。 */
+  methods: string[];
+  /** 可选目标入口；缺省只绑定 node.entry 主入口。 */
+  entry?: string;
+  /** 可选输入提示。 */
+  hint?: string;
+  /** 可选凭证申请页(仅 https；设置页外链须逐字命中)。 */
+  url?: string;
+}
+
 /**
  * 随插件安装的本地 Node 工作进程声明。
  *
@@ -171,6 +205,11 @@ export interface GhostNodeNeeds {
    * 权限本质不变:仍只能跑包内申报过的 JS,node 槽本就是用户级执行权。
    */
   childSpawn?: boolean;
+  /**
+   * 由主机 safeStorage 持久化、按声明的方法临时注入 Worker 的凭证。
+   * 这是 Node 高风险能力的一部分，安装权限清单会逐条披露。
+   */
+  secretBindings?: GhostNodeSecretBinding[];
 }
 
 /** node 额外入口条数上限(1 主 + 4 额外 = 每插件至多 5 个工作进程)。 */
@@ -632,8 +671,9 @@ export interface GhostManifest {
   /**
    * 设置页「自定义设置区」界面入口(可选;安装目录内相对路径,意识自绘)。
    * 与面板同款沙箱 webview 渲染(零桥、分区断网、CSP 'self'),主题 token
-   * 由主机灌入。凭证输入**不**走这里(必须 network.secrets 声明、主机渲染,
-   * 意识摸不到明文);自定义参数持久化走同源 `fetch('/kv')`。
+   * 由主机灌入。用户填写的 `network.secrets` 与 `node.secretBindings` 凭证
+   * 必须在此页面收单并经 `/secrets` 只写通道立即交给主机保险库，不得写入
+   * `/kv`；其它自定义参数持久化走同源 `fetch('/kv')`。
    */
   settingsHtml?: string;
   /**
@@ -1926,6 +1966,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       'idleTimeoutSeconds',
       'entries',
       'childSpawn',
+      'secretBindings',
     ]);
     const unknownNodeField = Object.keys(nodeRaw).find((key) => !allowedNodeFields.has(key));
     if (unknownNodeField) {
@@ -2007,6 +2048,153 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (nodeRaw.childSpawn !== undefined && typeof nodeRaw.childSpawn !== 'boolean') {
       return { ok: false, reason: 'node.childSpawn 必须是布尔值' };
     }
+    let nodeSecretBindings: GhostNodeSecretBinding[] | undefined;
+    if (nodeRaw.secretBindings !== undefined) {
+      if (
+        !Array.isArray(nodeRaw.secretBindings) ||
+        nodeRaw.secretBindings.length === 0 ||
+        nodeRaw.secretBindings.length > GHOST_NODE_MAX_SECRET_BINDINGS
+      ) {
+        return {
+          ok: false,
+          reason: `node.secretBindings 必须是 1–${GHOST_NODE_MAX_SECRET_BINDINGS} 条的数组`,
+        };
+      }
+      if (raw.settingsHtml === undefined) {
+        return {
+          ok: false,
+          reason: 'node.secretBindings 需要 settingsHtml 收集凭证',
+        };
+      }
+      nodeSecretBindings = [];
+      const seenSecretKeys = new Set<string>();
+      for (const bindingRaw of nodeRaw.secretBindings) {
+        if (!isPlainObject(bindingRaw)) {
+          return { ok: false, reason: 'node.secretBindings 每项必须是对象' };
+        }
+        const binding = bindingRaw as Record<string, unknown>;
+        const unknownBindingField = Object.keys(binding).find(
+          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url'].includes(key),
+        );
+        if (unknownBindingField) {
+          return {
+            ok: false,
+            reason: `node.secretBindings[] 含不允许的字段 ${JSON.stringify(unknownBindingField)}`,
+          };
+        }
+        if (typeof binding.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.key)) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].key 必须是小写字母开头的 1–32 位小写/数字/下划线',
+          };
+        }
+        if (seenSecretKeys.has(binding.key)) {
+          return {
+            ok: false,
+            reason: `node.secretBindings 含重复 key ${JSON.stringify(binding.key)}`,
+          };
+        }
+        seenSecretKeys.add(binding.key);
+        if (
+          typeof binding.label !== 'string' ||
+          binding.label.trim().length === 0 ||
+          binding.label.length > 64
+        ) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].label 必须是 1–64 字符的非空字符串',
+          };
+        }
+        if (
+          !Array.isArray(binding.methods) ||
+          binding.methods.length === 0 ||
+          binding.methods.length > GHOST_NODE_MAX_SECRET_METHODS
+        ) {
+          return {
+            ok: false,
+            reason: `node.secretBindings[].methods 必须是 1–${GHOST_NODE_MAX_SECRET_METHODS} 条的数组`,
+          };
+        }
+        const methods: string[] = [];
+        for (const method of binding.methods) {
+          if (typeof method !== 'string' || !/^[A-Za-z0-9_./:-]{1,128}$/.test(method)) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].methods 每项必须是 1–128 位安全方法名',
+            };
+          }
+          if (nodeRaw.protocol === 'mcp-stdio' && isGhostNodeMcpReservedMethod(method)) {
+            return {
+              ok: false,
+              reason: `node.secretBindings[].methods 不能绑定宿主保留的 MCP 方法 ${JSON.stringify(method)}`,
+            };
+          }
+          if (methods.includes(method)) {
+            return {
+              ok: false,
+              reason: `node.secretBindings[].methods 含重复方法 ${JSON.stringify(method)}`,
+            };
+          }
+          methods.push(method);
+        }
+        let bindingEntry: string | undefined;
+        if (binding.entry !== undefined) {
+          if (
+            typeof binding.entry !== 'string' ||
+            (binding.entry !== nodeRaw.entry && !(nodeEntries ?? []).includes(binding.entry))
+          ) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].entry 必须逐字命中 node.entry 或 node.entries',
+            };
+          }
+          bindingEntry = binding.entry;
+        }
+        if (
+          binding.hint !== undefined &&
+          (typeof binding.hint !== 'string' ||
+            binding.hint.trim().length === 0 ||
+            binding.hint.length > 200)
+        ) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].hint 必须是 1–200 字符的非空字符串',
+          };
+        }
+        if (binding.url !== undefined) {
+          if (
+            typeof binding.url !== 'string' ||
+            binding.url.length === 0 ||
+            binding.url.length > 200
+          ) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].url 必须是 1–200 字符的字符串',
+            };
+          }
+          let parsed: URL;
+          try {
+            parsed = new URL(binding.url);
+          } catch {
+            return { ok: false, reason: 'node.secretBindings[].url 不是合法的绝对地址' };
+          }
+          if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].url 仅支持 https 且不允许内嵌用户名/密码',
+            };
+          }
+        }
+        nodeSecretBindings.push({
+          key: binding.key,
+          label: binding.label,
+          methods,
+          ...(bindingEntry !== undefined ? { entry: bindingEntry } : {}),
+          ...(binding.hint !== undefined ? { hint: binding.hint as string } : {}),
+          ...(binding.url !== undefined ? { url: binding.url as string } : {}),
+        });
+      }
+    }
     node = {
       entry: nodeRaw.entry,
       protocol: nodeRaw.protocol as GhostNodeProtocol,
@@ -2018,10 +2206,27 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         : {}),
       ...(nodeEntries !== undefined ? { entries: nodeEntries } : {}),
       ...(nodeRaw.childSpawn !== undefined ? { childSpawn: nodeRaw.childSpawn } : {}),
+      ...(nodeSecretBindings !== undefined ? { secretBindings: nodeSecretBindings } : {}),
     };
   }
   if (slots.includes('node') && node === undefined) {
     return { ok: false, reason: 'slots 声明了 "node" 但缺少 node 工作进程详单' };
+  }
+  if (node?.secretBindings) {
+    for (const binding of node.secretBindings) {
+      if (network?.secrets?.some((secret) => secret.key === binding.key)) {
+        return {
+          ok: false,
+          reason: `network.secrets 的 key ${JSON.stringify(binding.key)} 与 node.secretBindings 撞名`,
+        };
+      }
+      if (network?.connections?.some((connection) => connection.key === binding.key)) {
+        return {
+          ok: false,
+          reason: `network.connections[].key ${JSON.stringify(binding.key)} 与 node.secretBindings 的 key 撞名(两者共用命名空间)`,
+        };
+      }
+    }
   }
 
   // preview 槽详单:与 slots 含 'preview' **严格成对**(有槽必有详单——域名
