@@ -49,6 +49,13 @@ function isWindowsReservedName(name: string): boolean {
  * 'preview' = 面板预览(2026-07-23):插件经管子申请在右侧栏内置浏览器里打开
  * 一个网址标签页。网址范围装入时在 preview.hosts 白名单里定死(同 network
  * 域名白名单语法),运行期主机逐次校验,范围外一律拒——防钓鱼是结构性的。
+ * 'skill' = 捆绑 Agent Skills(2026-07-25):插件随包携带 SKILL.md 技能目录,
+ * 装入且启用后由主机链接进共享技能根 ~/.agents/skills/<id>--<name>(win32 用
+ * junction),Claude Code 与 Codex 都能发现。信任面与其它槽完全不同量级:技能
+ * 指令由主 Agent 以**用户全部权限**执行、对所有项目与会话生效、不受插件沙箱
+ * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
+ * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
+ * 一致,打包与装入双侧强制),装入确认框逐条列出并置于清单最上部。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -64,6 +71,7 @@ export const GHOST_SLOTS = [
   'session-context',
   'pick',
   'preview',
+  'skill',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -624,6 +632,41 @@ export const GHOST_PREVIEW_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   '[::1]',
 ]);
 
+/** skill 槽:单插件最多捆绑的 Agent Skill 数(范围越小越好,同 preview 精神)。 */
+export const GHOST_SKILL_MAX_ITEMS = 4;
+/** skill 槽:SKILL.md 单文件字节上限。打包与装入两侧共用,避免契约漂移。 */
+export const GHOST_SKILL_MD_MAX_BYTES = 64 * 1024;
+/** skill 槽:技能 name 长度上限(链接目录名的一半,克制)。 */
+export const GHOST_SKILL_NAME_MAX_CHARS = 64;
+/**
+ * skill 槽:技能 name 形状——小写字母/数字,连字符仅作单段分隔(禁首尾与连续
+ * 连字符)。比 SkillHub 的技能名规则更严:意识 id 允许含 `--`(GHOST_ID_RE),
+ * 共享技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
+ * 按"最后一个 `--`"拆分才唯一,不同插件才不可能撞出同一个链接名。
+ */
+export const GHOST_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** skill 槽单条技能声明(全声明式:确认框展示的就是这里的字段)。 */
+export interface GhostSkillItem {
+  /** 包内技能目录(安全相对路径,目录内必须有 SKILL.md)。 */
+  dir: string;
+  /**
+   * 技能名。必须与 SKILL.md frontmatter 的 name 逐字一致(打包与装入双侧
+   * 强制)——确认框里用户看到的,必须就是 Agent 实际读到的。
+   */
+  name: string;
+  /** 技能说明。必须与 SKILL.md frontmatter 的 description 逐字一致(同上)。 */
+  description: string;
+}
+
+/**
+ * skill 槽详单(与 slots 含 'skill' 严格成对——有槽必有详单:捆绑了什么技能
+ * 是本能力的全部知情面,不允许"先装后说")。装入确认框逐条展示。
+ */
+export interface GhostSkillNeeds {
+  items: GhostSkillItem[];
+}
+
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
   /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
@@ -727,6 +770,12 @@ export interface GhostManifest {
    * 打开预览标签页的域名白名单。
    */
   preview?: GhostPreviewNeeds;
+  /**
+   * skill 槽详单(与 slots 含 'skill' 严格成对):随包捆绑的 Agent Skills 清单。
+   * 启用时主机链接进共享技能根,Claude Code 与 Codex 双端可见;字段不参与
+   * 本地化(必须与 SKILL.md 逐字一致,见 GhostSkillItem)。
+   */
+  skill?: GhostSkillNeeds;
 }
 
 /** 判断值是否可作为 `ghost.json.id` 和跨平台安全的安装目录名。 */
@@ -2273,6 +2322,91 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     };
   }
 
+  // skill 槽详单:与 slots 含 'skill' **严格成对**(有槽必有详单——捆绑了什么
+  // 技能是本能力的全部知情面)。name/description 与 SKILL.md 的逐字一致性在
+  // 打包与装入两侧另行强制,这里只管声明本身的形状。name/dir 大小写折叠去重:
+  // win32 文件系统折叠大小写,共享技能根的链接名不允许折叠后相撞。
+  let skill: GhostSkillNeeds | undefined;
+  if (raw.skill !== undefined) {
+    if (!isPlainObject(raw.skill)) {
+      return {
+        ok: false,
+        reason:
+          'skill 详单必须是对象(如 { "items": [{ "dir": "skills/foo", "name": "foo", "description": "..." }] })',
+      };
+    }
+    if (!slots.includes('skill')) {
+      return { ok: false, reason: '声明了 skill 详单但 slots 未包含 "skill"' };
+    }
+    const skillRaw = raw.skill as Record<string, unknown>;
+    const unknownSkillField = Object.keys(skillRaw).find((key) => key !== 'items');
+    if (unknownSkillField !== undefined) {
+      return { ok: false, reason: `skill 含不允许的字段 ${JSON.stringify(unknownSkillField)}` };
+    }
+    if (!Array.isArray(skillRaw.items) || skillRaw.items.length === 0) {
+      return { ok: false, reason: 'skill.items 必须是非空数组(随包捆绑的技能清单)' };
+    }
+    if (skillRaw.items.length > GHOST_SKILL_MAX_ITEMS) {
+      return { ok: false, reason: `skill.items 最多 ${GHOST_SKILL_MAX_ITEMS} 条` };
+    }
+    const skillItems: GhostSkillItem[] = [];
+    const seenSkillNames = new Set<string>();
+    const seenSkillDirs = new Set<string>();
+    for (const item of skillRaw.items) {
+      if (!isPlainObject(item)) {
+        return { ok: false, reason: 'skill.items 每项必须是对象({ dir, name, description })' };
+      }
+      const itemRaw = item as Record<string, unknown>;
+      const unknownItemField = Object.keys(itemRaw).find(
+        (key) => key !== 'dir' && key !== 'name' && key !== 'description',
+      );
+      if (unknownItemField !== undefined) {
+        return {
+          ok: false,
+          reason: `skill.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}`,
+        };
+      }
+      if (!isSafeGhostRelativePath(itemRaw.dir)) {
+        return {
+          ok: false,
+          reason: `skill.items[].dir 必须是包内安全相对路径(如 "skills/foo"),得到 ${JSON.stringify(itemRaw.dir)}`,
+        };
+      }
+      if (
+        typeof itemRaw.name !== 'string' ||
+        itemRaw.name.length > GHOST_SKILL_NAME_MAX_CHARS ||
+        !GHOST_SKILL_NAME_RE.test(itemRaw.name)
+      ) {
+        return {
+          ok: false,
+          reason: `skill.items[].name 必须是小写字母/数字加单连字符分段(禁首尾/连续连字符)、长度 1–${GHOST_SKILL_NAME_MAX_CHARS},得到 ${JSON.stringify(itemRaw.name)}`,
+        };
+      }
+      if (
+        typeof itemRaw.description !== 'string' ||
+        itemRaw.description.trim().length === 0 ||
+        itemRaw.description.length > 1024
+      ) {
+        return { ok: false, reason: 'skill.items[].description 必须是 1–1024 字符的非空字符串' };
+      }
+      const nameFold = itemRaw.name.toLowerCase();
+      if (seenSkillNames.has(nameFold)) {
+        return { ok: false, reason: `skill.items 含重复 name ${JSON.stringify(itemRaw.name)}` };
+      }
+      seenSkillNames.add(nameFold);
+      const dirFold = itemRaw.dir.toLowerCase();
+      if (seenSkillDirs.has(dirFold)) {
+        return { ok: false, reason: `skill.items 含重复 dir ${JSON.stringify(itemRaw.dir)}` };
+      }
+      seenSkillDirs.add(dirFold);
+      skillItems.push({ dir: itemRaw.dir, name: itemRaw.name, description: itemRaw.description });
+    }
+    skill = { items: skillItems };
+  }
+  if (slots.includes('skill') && skill === undefined) {
+    return { ok: false, reason: 'slots 声明了 "skill" 但缺少 skill 详单(items 技能清单必填)' };
+  }
+
   // 显式触发指令:1–32 字符、无空白、无 '/'(允许中文,如 /画图);
   // 必须有工具可干活。跨意识查重在装入时由 GhostManager 执行(需要本地清单)。
   if (raw.command !== undefined) {
@@ -2345,6 +2479,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(keywords !== undefined ? { keywords } : {}),
       ...(panel !== undefined ? { panel } : {}),
       ...(preview !== undefined ? { preview } : {}),
+      ...(skill !== undefined ? { skill } : {}),
     },
   };
 }
