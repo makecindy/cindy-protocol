@@ -435,6 +435,98 @@ describe('Ghost manifest contract', () => {
     expect(loopback.ok).toBe(true);
   });
 
+  it('enforces skill slot / items pairing and shape rules', () => {
+    const base = { ...validManifest, slots: ['tool', 'skill'] };
+    const goodItems = [{ dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' }];
+    // 有槽必有详单;有详单必有槽
+    expect(validateGhostManifest(base)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('缺少 skill 详单'),
+    });
+    expect(validateGhostManifest({ ...validManifest, skill: { items: goodItems } })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未包含 "skill"'),
+    });
+    // 合法声明原样收录
+    const good = validateGhostManifest({ ...base, skill: { items: goodItems } });
+    expect(good).toMatchObject({ ok: true, manifest: { skill: { items: goodItems } } });
+    // items 形状:空/超限/非对象/自造字段一律拒
+    expect(validateGhostManifest({ ...base, skill: { items: [] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...base, skill: {} }).ok).toBe(false);
+    expect(validateGhostManifest({ ...base, skill: { items: goodItems, extra: 1 } }).ok).toBe(
+      false,
+    );
+    expect(
+      validateGhostManifest({
+        ...base,
+        skill: { items: [{ ...goodItems[0], scope: 'global' }] },
+      }).ok,
+    ).toBe(false);
+    const five = Array.from({ length: 5 }, (_, i) => ({
+      dir: `skills/s${i}`,
+      name: `s${i}`,
+      description: 'x',
+    }));
+    expect(validateGhostManifest({ ...base, skill: { items: five } })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('最多 4 条'),
+    });
+    expect(validateGhostManifest({ ...base, skill: { items: five.slice(0, 4) } }).ok).toBe(true);
+  });
+
+  it('enforces skill item dir / name / description constraints and case-folded dedupe', () => {
+    const base = { ...validManifest, slots: ['tool', 'skill'] };
+    const item = (patch: Record<string, unknown>) =>
+      validateGhostManifest({
+        ...base,
+        skill: { items: [{ dir: 'skills/foo', name: 'foo', description: 'x', ...patch }] },
+      });
+    // dir:必须是包内安全相对路径
+    expect(item({ dir: '../evil' }).ok).toBe(false);
+    expect(item({ dir: '/abs/path' }).ok).toBe(false);
+    expect(item({ dir: 'skills\\foo' }).ok).toBe(false);
+    expect(item({ dir: 'skills/./foo' }).ok).toBe(false);
+    expect(item({ dir: '' }).ok).toBe(false);
+    // name:小写字母数字单连字符分段(链接名 <id>--<name> 的无歧义前提)
+    expect(item({ name: 'foo-bar' }).ok).toBe(true);
+    expect(item({ name: 'Foo' }).ok).toBe(false);
+    expect(item({ name: '-foo' }).ok).toBe(false);
+    expect(item({ name: 'foo-' }).ok).toBe(false);
+    expect(item({ name: 'foo--bar' }).ok).toBe(false);
+    expect(item({ name: '' }).ok).toBe(false);
+    expect(item({ name: 'a'.repeat(65) }).ok).toBe(false);
+    expect(item({ name: 'a'.repeat(64) }).ok).toBe(true);
+    // description:1–1024 非空
+    expect(item({ description: '' }).ok).toBe(false);
+    expect(item({ description: '   ' }).ok).toBe(false);
+    expect(item({ description: 'x'.repeat(1025) }).ok).toBe(false);
+    expect(item({ description: 'x'.repeat(1024) }).ok).toBe(true);
+    expect(item({ description: 42 }).ok).toBe(false);
+    // name/dir 大小写折叠去重(win32 文件系统折叠大小写)
+    expect(
+      validateGhostManifest({
+        ...base,
+        skill: {
+          items: [
+            { dir: 'skills/a', name: 'foo', description: 'x' },
+            { dir: 'skills/b', name: 'foo', description: 'y' },
+          ],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 name') });
+    expect(
+      validateGhostManifest({
+        ...base,
+        skill: {
+          items: [
+            { dir: 'skills/A', name: 'foo', description: 'x' },
+            { dir: 'skills/a', name: 'bar', description: 'y' },
+          ],
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 dir') });
+  });
+
   it('validates card and agent capability details', () => {
     expect(
       validateGhostManifest({
