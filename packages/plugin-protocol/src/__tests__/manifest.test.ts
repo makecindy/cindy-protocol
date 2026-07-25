@@ -141,7 +141,7 @@ describe('Ghost manifest contract', () => {
       entry: 'main.js',
       settingsHtml: 'settings.html',
       settingsHeight: 760,
-      slots: ['tool', 'card', 'node', 'session-context', 'pick', 'preview'],
+      slots: ['tool', 'card', 'node', 'session-context', 'pick', 'preview', 'workspace'],
       card: { externalLinks: true },
       node: {
         entry: 'node/maker-mcp.cjs',
@@ -165,6 +165,7 @@ describe('Ghost manifest contract', () => {
       'session-context',
       'pick',
       'preview',
+      'workspace',
     ]);
     expect(result.manifest.node).toEqual({
       entry: 'node/maker-mcp.cjs',
