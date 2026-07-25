@@ -56,6 +56,12 @@ function isWindowsReservedName(name: string): boolean {
  * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
  * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
  * 一致,打包与装入双侧强制),装入确认框逐条列出并置于清单最上部。
+ * 'workspace' = 工作区会话(2026-07-25):插件请主机在指定本机项目目录下确保
+ * 存在一个会话入口并显示在侧边栏——目录下已有 active 会话即复用,没有才创建
+ * 空 draft 会话(不拉起 agent 进程)。目录授权两条路:系统选文件夹窗口亲选
+ * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
+ * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
+ * v1 一律拒(fail closed)。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -72,6 +78,7 @@ export const GHOST_SLOTS = [
   'pick',
   'preview',
   'skill',
+  'workspace',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
