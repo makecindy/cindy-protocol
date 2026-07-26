@@ -26,6 +26,7 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 14. **多 provider**:`provider.bind.*` / `provider.prefs.*` —— 在不改变 Slack 旧帧的前提下追加统一的 provider 绑定与偏好通道
 15. **最近会话**:`query.kind=sessions` —— Telegram `/session` 仅拉取最多 20 条脱敏会话摘要
 16. **群消息中继(group-relay)**:`group.message` —— server 把群消息实时转发给该群已知绑定成员的桌面(fire-and-forget),滚动窗口与上下文拼装全部在 desktop 本地;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_GROUP_RELAY='group-relay-v1'`)
+17. **上下线通知偏好**:`hello.lifecycleAnnouncement` 上报当前值,`lifecycle.preference` 实时更新;server 通过 `lifecycle-announcement-v1` feature 宣告支持
 
 ## 2. 核心设计原则
 

@@ -41,6 +41,7 @@ export {
   makeToolRequest,
   makeToolResponse,
   makeGroupMessage,
+  makeLifecyclePreference,
   serializeHookMessage,
   type HelloInput,
 } from './build';

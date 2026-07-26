@@ -12,6 +12,7 @@ import {
   HOOK_PROTOCOL_VERSION,
   isHookMessageType,
   makeHello,
+  makeLifecyclePreference,
   makePing,
   makePong,
   makeSessionArchive,
@@ -69,6 +70,7 @@ describe('round-trip: 每种消息构造后可被解析且等价', () => {
         deviceName: 'Cindy',
         workspaces: ['cindy', 'blog'],
         agents: ['cc', 'codex'],
+        lifecycleAnnouncement: false,
       }),
     );
     if (msg.type !== 'hello') throw new Error('unreachable');
@@ -76,6 +78,15 @@ describe('round-trip: 每种消息构造后可被解析且等价', () => {
     expect(msg.payload.protocolVersion).toBe(HOOK_PROTOCOL_VERSION);
     expect(msg.v).toBe(HOOK_PROTOCOL_VERSION);
     expect(msg.id.length).toBeGreaterThan(0);
+    expect(msg.payload.lifecycleAnnouncement).toBe(false);
+  });
+
+  it('lifecycle.preference', () => {
+    roundTrip(makeLifecyclePreference({ enabled: true }));
+    expectReject(
+      { ...makeLifecyclePreference({ enabled: true }), payload: { enabled: 'yes' } },
+      'lifecycle.preference.enabled',
+    );
   });
 
   it('welcome / ping / pong', () => {
