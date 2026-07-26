@@ -4,6 +4,7 @@ import {
   VOICE_MAX_REFINER_PAYLOAD_CHARS,
   VOICE_PROTOCOL_VERSION,
   VOICE_ASR_PATH,
+  VOICE_DICTIONARY_LEARNING_PATH,
   VOICE_SESSION_PATH,
   makeVoiceRefinePath,
   parseCreateVoiceSessionRequest,
@@ -73,6 +74,15 @@ const VALID_REFINEMENT_PAYLOAD: VoiceRefinerUserPayload = {
   },
 };
 
+/** Same refinement input, minus the prompt version the server now owns. */
+const SERVER_OWNED_REFINEMENT_PAYLOAD: VoiceRefinerUserPayload = {
+  schemaName: 'dictation_refinement',
+  input: {
+    context: { uiLanguage: 'zh-CN', sourceLanguage: 'zh-CN' },
+    dictationText: '测试语音输入',
+  },
+};
+
 describe('voice session contract', () => {
   it('round-trips the create request and response', () => {
     roundTrip(VALID_SESSION_REQUEST, parseCreateVoiceSessionRequest);
@@ -135,9 +145,36 @@ describe('voice session contract', () => {
     );
   });
 
+  it('round-trips the server-owned prompt marker and rejects bad owners', () => {
+    roundTrip(
+      {
+        ...VALID_SESSION_RESPONSE,
+        refiner: { enabled: true, provider: 'example-refiner-provider', promptOwner: 'server' },
+      } satisfies CreateVoiceSessionResponse,
+      parseCreateVoiceSessionResponse,
+    );
+    // Absent marker is the rollout default: a server that predates the field
+    // keeps the historical client-owned behaviour.
+    expect(parseCreateVoiceSessionResponse(VALID_SESSION_RESPONSE).ok).toBe(true);
+    expectReject(
+      {
+        ...VALID_SESSION_RESPONSE,
+        refiner: { enabled: true, provider: 'example-refiner-provider', promptOwner: 'nobody' },
+      },
+      parseCreateVoiceSessionResponse,
+      'promptOwner',
+    );
+    expectReject(
+      { ...VALID_SESSION_RESPONSE, refiner: { enabled: false, promptOwner: 'server' } },
+      parseCreateVoiceSessionResponse,
+      'must be absent',
+    );
+  });
+
   it('builds encoded Cindy-owned routes', () => {
     expect(VOICE_SESSION_PATH).toBe('/api/voice/sessions');
     expect(VOICE_ASR_PATH).toBe('/api/voice/asr');
+    expect(VOICE_DICTIONARY_LEARNING_PATH).toBe('/api/voice/dictionary-learning');
     expect(makeVoiceRefinePath('session/a', 'provider+b')).toBe(
       '/api/voice/sessions/session%2Fa/refine?provider=provider%2Bb',
     );
@@ -184,6 +221,50 @@ describe('voice refinement contract', () => {
       ok: true,
       value: VALID_REFINEMENT_PAYLOAD,
     });
+  });
+
+  it('accepts a server-owned envelope carrying only the user message', () => {
+    const request = {
+      messages: [{ role: 'user', content: JSON.stringify(SERVER_OWNED_REFINEMENT_PAYLOAD) }],
+    };
+    expect(parseVoiceRefineRequest(request).ok).toBe(true);
+    expect(parseVoiceRefinerUserPayloadJson(request.messages[0].content)).toEqual({
+      ok: true,
+      value: SERVER_OWNED_REFINEMENT_PAYLOAD,
+    });
+  });
+
+  it('round-trips both payload schemas without a client prompt version', () => {
+    roundTrip(SERVER_OWNED_REFINEMENT_PAYLOAD, parseVoiceRefinerUserPayload);
+    roundTrip(
+      {
+        schemaName: 'dictation_dictionary_learning',
+        input: { beforeText: '旧文本', afterText: '新文本' },
+      } satisfies VoiceRefinerUserPayload,
+      parseVoiceRefinerUserPayload,
+    );
+  });
+
+  it('rejects envelopes that are empty, over-long or missing the user message', () => {
+    expectReject({ messages: [] }, parseVoiceRefineRequest, 'request.messages');
+    expectReject(
+      {
+        messages: [
+          { role: 'system', content: 'a' },
+          { role: 'user', content: 'b' },
+          { role: 'user', content: 'c' },
+        ],
+      },
+      parseVoiceRefineRequest,
+      'request.messages',
+    );
+    // A lone system message is not a valid server-owned request: the user
+    // payload is what carries the schemaName the server dispatches on.
+    expectReject(
+      { messages: [{ role: 'system', content: 'only a prompt' }] },
+      parseVoiceRefineRequest,
+      'messages[0].role must be user',
+    );
   });
 
   it('rejects bad message order, malformed JSON and unsupported schemas', () => {

@@ -3,6 +3,7 @@
 import {
   VOICE_CLIENT_KINDS,
   VOICE_MAX_REFINER_PAYLOAD_CHARS,
+  VOICE_PROMPT_OWNERS,
   VOICE_PROTOCOL_PROFILES,
   VOICE_PROTOCOL_VERSION,
   type CreateVoiceSessionRequest,
@@ -10,6 +11,7 @@ import {
   type VoiceClientKind,
   type VoiceErrorResponse,
   type VoiceParseResult,
+  type VoicePromptOwner,
   type VoiceProtocolProfile,
   type VoiceRefineRequest,
   type VoiceRefinerUserPayload,
@@ -161,8 +163,16 @@ export function parseCreateVoiceSessionResponse(
       max: 80,
     });
     if (error) return fail(error);
+    if (
+      value.refiner.promptOwner !== undefined &&
+      !VOICE_PROMPT_OWNERS.includes(value.refiner.promptOwner as VoicePromptOwner)
+    ) {
+      return fail('response.refiner.promptOwner must be client or server when present');
+    }
   } else if (value.refiner.provider !== undefined) {
     return fail('response.refiner.provider must be absent when refinement is disabled');
+  } else if (value.refiner.promptOwner !== undefined) {
+    return fail('response.refiner.promptOwner must be absent when refinement is disabled');
   }
 
   return ok(value as unknown as CreateVoiceSessionResponse);
@@ -172,20 +182,33 @@ export function parseVoiceRefineRequest(value: unknown): VoiceParseResult<VoiceR
   if (!isPlainObject(value)) return fail('request must be an object');
   let error = optionalStringError(value.prompt_cache_key, 'request.prompt_cache_key', { max: 200 });
   if (error) return fail(error);
-  if (!Array.isArray(value.messages) || value.messages.length !== 2) {
-    return fail('request.messages must contain exactly system and user messages');
+  // Two shapes are legal: `[system, user]` when the client owns the prompt, and
+  // `[user]` alone when the server does (see VoicePromptOwner). The user
+  // message is always last, so its index depends on whether system is present.
+  if (!Array.isArray(value.messages) || value.messages.length < 1 || value.messages.length > 2) {
+    return fail(
+      'request.messages must contain an optional system message followed by a user message',
+    );
   }
 
-  const [system, user] = value.messages;
-  if (!isPlainObject(system) || system.role !== 'system') {
-    return fail('request.messages[0].role must be system');
+  const userIndex = value.messages.length - 1;
+  if (value.messages.length === 2) {
+    const system = value.messages[0];
+    if (!isPlainObject(system) || system.role !== 'system') {
+      return fail('request.messages[0].role must be system');
+    }
+    error = stringError(system.content, 'request.messages[0].content', { min: 1, max: 32_000 });
+    if (error) return fail(error);
   }
-  error = stringError(system.content, 'request.messages[0].content', { min: 1, max: 32_000 });
-  if (error) return fail(error);
+
+  const user = value.messages[userIndex];
   if (!isPlainObject(user) || user.role !== 'user') {
-    return fail('request.messages[1].role must be user');
+    return fail(`request.messages[${userIndex}].role must be user`);
   }
-  error = stringError(user.content, 'request.messages[1].content', { min: 1, max: 64_000 });
+  error = stringError(user.content, `request.messages[${userIndex}].content`, {
+    min: 1,
+    max: 64_000,
+  });
   if (error) return fail(error);
 
   return ok(value as unknown as VoiceRefineRequest);
@@ -221,7 +244,11 @@ function validateDictationRefinementInput(value: unknown, path: string): string 
     'userDictionaryMatches',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  let error = stringError(value.promptVersion, `${path}.promptVersion`, { min: 1, max: 80 });
+  // Optional since server-owned prompts: the server then owns the version too.
+  let error = optionalStringError(value.promptVersion, `${path}.promptVersion`, {
+    min: 1,
+    max: 80,
+  });
   if (error) return error;
   error = validateRefinementContext(value.context, `${path}.context`);
   if (error) return error;
@@ -331,7 +358,11 @@ function validateDictionaryLearningInput(value: unknown, path: string): string |
     'existingCandidates',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  let error = stringError(value.promptVersion, `${path}.promptVersion`, { min: 1, max: 80 });
+  // Optional since server-owned prompts: the server then owns the version too.
+  let error = optionalStringError(value.promptVersion, `${path}.promptVersion`, {
+    min: 1,
+    max: 80,
+  });
   if (error) return error;
   if (value.debug !== undefined && typeof value.debug !== 'boolean') {
     return `${path}.debug must be a boolean when present`;

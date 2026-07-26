@@ -8,8 +8,9 @@
 
 - `POST /api/voice/sessions` 的会话申请与响应；
 - 一次性 ASR ticket、过期时间和 WebSocket 目标描述；
-- `protocolProfile`、客户端类型与 refiner schema 等枚举；
+- `protocolProfile`、客户端类型、refiner schema 与 prompt 归属等枚举；
 - `POST /api/voice/sessions/:sessionId/refine` 的请求信封；
+- `POST /api/voice/dictionary-learning` 的会话无关入口；
 - 听写优化、词典学习两种 user payload；
 - `{ error: { code, message } }` 错误信封和稳定路由构造器。
 
@@ -24,6 +25,29 @@
 当前 `VOICE_PROTOCOL_VERSION` 为 `1`。首次滚动接入期间，请求与响应里的 `protocolVersion` 为可选字段：缺省按 v1 解释，显式值只接受 `1`。这样新 server 可以先增加字段而不影响旧客户端，新客户端也能读取尚未升级的旧 server 响应。
 
 协议演进遵循 append-only：新增可选字段时旧端忽略未知字段；修改已有字段语义、删除字段或收紧必填约束属于不兼容变更，必须升级版本并同步安排两个消费仓的升级窗口。
+
+## Prompt 归属（`promptOwner`）
+
+会话响应的 `refiner.promptOwner` 声明这次托管润色由谁提供 system prompt：
+
+| 取值            | 客户端行为                                                                                  | 服务端行为                                              |
+| --------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 缺省 / `client` | 发 `[system, user]` 两条消息，自带 prompt 与 `promptVersion`，并自行派生 `prompt_cache_key` | 直接使用客户端给的 prompt                               |
+| `server`        | 只发 `[user]` 一条消息，省略 `promptVersion` 与 `prompt_cache_key`                          | 按 `schemaName` 注入自己的 prompt，并自行生成 cache key |
+
+降级行为（append-only 要求逐项写明）：
+
+- **新客户端 + 旧服务端**：响应里没有 `promptOwner`，客户端按 `client` 走历史行为，功能不受影响；
+- **旧客户端 + 新服务端**：客户端仍发两条消息，服务端沿用其 prompt，不强制切换；
+- 该字段只在 `refiner.enabled` 为 `true` 时允许出现，且只影响托管润色 —— BYOK 客户端直连上游，必须始终自带 prompt。
+
+因此 `parseVoiceRefineRequest` 接受两种信封形态：`[system, user]` 与仅 `[user]`。user 消息恒为最后一条（它承载服务端据以分发的 `schemaName`），只给 system 而没有 user 属于非法请求。`VoiceDictationRefinementInput.promptVersion` 与 `VoiceDictionaryLearningInput.promptVersion` 相应放宽为可选：`server` 归属下版本号由服务端掌握。
+
+## 词典学习入口
+
+`VOICE_DICTIONARY_LEARNING_PATH`（`POST /api/voice/dictionary-learning`）与 refine 共用 `VoiceRefineRequest` 信封和 `dictation_dictionary_learning` payload，但**不绑定会话**，仅凭账号令牌鉴权。
+
+原因是触发时机：词典学习发生在用户改动已插入文本之后，此时 ASR 会话与其一次性 ticket 已经回收，`/api/voice/sessions/:sessionId/refine` 不再可用。该端点始终由服务端提供 prompt，不需要 `promptOwner` 协商；旧服务端没有这个路由，客户端按 404 静默跳过即可。
 
 ## 运行时校验
 
