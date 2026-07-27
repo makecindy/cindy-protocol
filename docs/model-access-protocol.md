@@ -41,3 +41,8 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 
 后续新增可选字段可在 v1 内 append-only 演进；修改既有字段语义、移除字段或扩展闭合
 枚举时必须评估并升级 schema version。
+
+协议包以 TypeScript 源码发布。Node16/NodeNext 消费方使用入口中的显式 `.js`
+扩展名；Metro/React Native 消费方应像现有 `device-link` workspace 包一样，把该
+协议包注册为 TS 源码包并配置 `.js` → `.ts` 的 resolver 映射，不应在协议包内提交
+伪造的 JavaScript 构建产物。
