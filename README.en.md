@@ -68,8 +68,8 @@ the commit message format is in [the commit convention](docs/commit-convention.m
 
 ## License
 
-Released under the [Apache License 2.0](LICENSE) (copyright holder: X.D. Network
-Inc.; see [NOTICE](NOTICE)). Unless stated otherwise in writing, any contribution
+Released under the [Apache License 2.0](LICENSE) (copyright holder: XD Inc.;
+see [NOTICE](NOTICE)). Unless stated otherwise in writing, any contribution
 you intentionally submit for inclusion in this repository is licensed under the
 same terms, per Section 5 of Apache-2.0.
 

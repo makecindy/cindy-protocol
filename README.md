@@ -47,7 +47,7 @@ packages:
 
 ## 许可证
 
-本仓库以 [Apache License 2.0](LICENSE) 发布(版权方:X.D. Network Inc.,见 [NOTICE](NOTICE))。除非另有书面说明,你有意提交至本仓库的任何贡献,均按 Apache-2.0 第 5 条以相同许可条款授权。
+本仓库以 [Apache License 2.0](LICENSE) 发布(版权方:XD Inc.,见 [NOTICE](NOTICE))。除非另有书面说明,你有意提交至本仓库的任何贡献,均按 Apache-2.0 第 5 条以相同许可条款授权。
 
 ## 变更纪律
 
