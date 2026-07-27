@@ -8,7 +8,7 @@ import {
   type ModelAgent,
   type ModelCurrency,
   type ModelEffort,
-} from './types';
+} from './types.js';
 
 type PlainObject = Record<string, unknown>;
 

@@ -5,7 +5,7 @@ import {
   MODEL_ACCESS_MODELS_PATH,
   parseListModelsResponse,
   type ListModelsResponse,
-} from '../index';
+} from '../index.js';
 
 const VALID_RESPONSE: ListModelsResponse = {
   schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
