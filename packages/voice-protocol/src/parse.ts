@@ -437,11 +437,17 @@ export function parseVoiceRefinerUserPayload(
   }
 
   const requirePromptVersion = options?.promptOwner === 'client';
-  if (
-    options?.route === 'dictionary_learning' &&
-    value.schemaName !== 'dictation_dictionary_learning'
-  ) {
-    return fail('payload.schemaName must be dictation_dictionary_learning on this route');
+  if (options?.route === 'dictionary_learning') {
+    // Server-owned only, so a caller asserting client ownership on this route
+    // is self-contradictory — reject it rather than silently validating a
+    // forbidden combination for consumers that parse envelope and payload
+    // separately.
+    if (options.promptOwner === 'client') {
+      return fail('payload cannot be client-owned on this route');
+    }
+    if (value.schemaName !== 'dictation_dictionary_learning') {
+      return fail('payload.schemaName must be dictation_dictionary_learning on this route');
+    }
   }
 
   let error: string | null;
@@ -494,6 +500,13 @@ export function parseVoiceRefineRequestWithPayload(
   const route = options?.route ?? 'refine';
   if (route === 'dictionary_learning' && promptOwner === 'client') {
     return fail('request.messages must omit the system message on this route');
+  }
+  // A client that does not hold the prompt cannot derive a key matching what
+  // the server will run, so under server ownership the key is the server's to
+  // generate. Accepting one here would let a caller pick the cache shard for a
+  // prompt it never saw.
+  if (promptOwner === 'server' && request.value.prompt_cache_key !== undefined) {
+    return fail('request.prompt_cache_key must be absent when the server owns the prompt');
   }
 
   const payload = parseVoiceRefinerUserPayloadJson(messages[messages.length - 1].content, {

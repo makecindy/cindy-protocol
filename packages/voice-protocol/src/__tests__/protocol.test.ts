@@ -399,6 +399,44 @@ describe('route-aware combined parsing', () => {
       parseVoiceRefinerUserPayload(SERVER_OWNED_REFINEMENT_PAYLOAD, { promptOwner: 'client' }).ok,
     ).toBe(false);
   });
+
+  it('rejects client ownership on the dictionary-learning route in the standalone parser', () => {
+    // The route is server-owned by definition, so this option combination is
+    // self-contradictory. Consumers that parse envelope and payload separately
+    // must not be able to validate it.
+    expectReject(
+      { value: learningPayload },
+      (input: { value: unknown }) =>
+        parseVoiceRefinerUserPayload(input.value, {
+          route: 'dictionary_learning',
+          promptOwner: 'client',
+        }),
+      'cannot be client-owned on this route',
+    );
+    expect(
+      parseVoiceRefinerUserPayload(learningPayload, {
+        route: 'dictionary_learning',
+        promptOwner: 'server',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects a caller-supplied cache key when the server owns the prompt', () => {
+    // Forwarding it would let a caller pick the cache shard for a prompt it
+    // never saw; under server ownership the key is the server's to generate.
+    expectReject(
+      { ...envelope(learningPayload), prompt_cache_key: 'attacker-chosen-shard' },
+      parseVoiceRefineRequestWithPayload,
+      'prompt_cache_key must be absent',
+    );
+    // Client-owned requests still carry their own key, as before.
+    expect(
+      parseVoiceRefineRequestWithPayload({
+        ...envelope(VALID_REFINEMENT_PAYLOAD, 'a prompt'),
+        prompt_cache_key: 'xdt:dictation_refinement:abc',
+      }).ok,
+    ).toBe(true);
+  });
 });
 
 describe('voice error envelope', () => {

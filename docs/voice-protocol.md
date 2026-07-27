@@ -60,7 +60,9 @@
 | `refine`（缺省）      | `client` / `server` | 两种都可                           |
 | `dictionary_learning` | 仅 `server`         | 仅 `dictation_dictionary_learning` |
 
-`promptVersion` 的必填性由归属决定：`client` 下仍然必填（它标识客户端那份 prompt 并参与 cache key），`server` 下可省略。单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。
+`promptVersion` 的必填性由归属决定：`client` 下仍然必填（它标识客户端那份 prompt 并参与 cache key），`server` 下可省略。单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。`dictionary_learning` 路由与 `promptOwner: 'client'` 自相矛盾，两者同时给出会被拒收。
+
+`prompt_cache_key` 同样受归属约束：`server` 归属下客户端无从派生能对上服务端实际 prompt 的 key，因此**必须缺省**，由服务端生成。组合解析会拒收 server 归属却携带该字段的请求——否则把校验后的 request 直接转发上游，等于让调用方为自己没见过的 prompt 指定缓存分片。
 
 ## 运行时校验
 
