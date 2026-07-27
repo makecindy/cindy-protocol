@@ -524,8 +524,14 @@ export interface BindStatePayload {
 
 // ── Provider-neutral binding (append-only v1) ───────────────────────────────
 
-/** IM providers supported by the shared Cindy relay. */
-export const HOOK_PROVIDERS = ['slack', 'telegram'] as const;
+/**
+ * IM providers supported by the shared Cindy relay.
+ * Append-only: adding a value here is backward compatible because every
+ * provider-specific frame family is gated behind a `provider:<id>` welcome
+ * capability — an old peer that does not know the new id never negotiates it,
+ * and its parse rejects stray frames without dropping the connection.
+ */
+export const HOOK_PROVIDERS = ['slack', 'telegram', 'x'] as const;
 export type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 /**
@@ -886,6 +892,9 @@ export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
 
 /** Server capability announcing that its provider registry enables Telegram. */
 export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
+
+/** Server capability announcing that its provider registry enables X (Twitter). */
+export const HOOK_FEATURE_PROVIDER_X = 'provider:x';
 
 /**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的

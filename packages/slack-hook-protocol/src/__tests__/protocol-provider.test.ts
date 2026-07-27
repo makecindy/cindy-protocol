@@ -6,6 +6,7 @@ import {
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
+  HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   PROVIDER_BIND_STATES,
   makeBindStart,
@@ -118,6 +119,7 @@ describe('provider feature negotiation constants', () => {
     expect(HOOK_FEATURE_PROVIDER_PREFS).toBe('provider-prefs-v1');
     expect(HOOK_FEATURE_SESSION_PICKER).toBe('session-picker-v1');
     expect(HOOK_FEATURE_PROVIDER_TELEGRAM).toBe('provider:telegram');
+    expect(HOOK_FEATURE_PROVIDER_X).toBe('provider:x');
   });
 
   it('does not alter the legacy Slack bind.start payload', () => {
@@ -155,6 +157,45 @@ describe('provider.bind frames', () => {
       roundTrip(makeProviderBindUpdate(payload));
       roundTrip(makeProviderBindState(payload));
     }
+  });
+
+  it('round-trips the x provider through bind and prefs frames', () => {
+    // 'x' is an append-only HOOK_PROVIDERS value: the frames are identical to
+    // Telegram's, only the provider id (and its connect-URL host) differ.
+    roundTrip(makeProviderBindStart({ requestId: 'request-x-1', provider: 'x' }));
+    roundTrip(
+      makeProviderBindCancel({ requestId: 'request-x-2', provider: 'x', attemptId: 'attempt-x' }),
+    );
+    roundTrip(
+      makeProviderBindRevoke({ requestId: 'request-x-3', provider: 'x', bindingId: 'binding-x' }),
+    );
+    const xPending: ProviderBindStatusPayload = {
+      ...PENDING,
+      provider: 'x',
+      scopeId: 'x-app-1',
+      scopeName: 'cindy_example_app',
+      connectUrl: 'https://example.com/x/connect?attempt=attempt-x',
+    };
+    roundTrip(makeProviderBindUpdate(xPending));
+    roundTrip(makeProviderBindState(xPending));
+    roundTrip(
+      makeProviderPrefsGet({
+        requestId: 'prefs-x-1',
+        provider: 'x',
+        bindingId: 'binding-x',
+        scopeId: null,
+      }),
+    );
+    roundTrip(
+      makeProviderPrefsState({
+        provider: 'x',
+        bindingId: 'binding-x',
+        scopeId: null,
+        replyTo: 'prefs-x-1',
+        bound: true,
+        prefs: [],
+      }),
+    );
   });
 
   it('rejects unknown providers and unsafe links', () => {
