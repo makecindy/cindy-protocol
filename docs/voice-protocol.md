@@ -41,7 +41,7 @@
 - **旧客户端 + 新服务端**：客户端仍发两条消息，服务端沿用其 prompt，不强制切换；
 - 该字段只在 `refiner.enabled` 为 `true` 时允许出现，且只影响托管润色 —— BYOK 客户端直连上游，必须始终自带 prompt。
 
-因此 `parseVoiceRefineRequest` 接受两种信封形态：`[system, user]` 与仅 `[user]`。user 消息恒为最后一条（它承载服务端据以分发的 `schemaName`），只给 system 而没有 user 属于非法请求。`VoiceDictationRefinementInput.promptVersion` 与 `VoiceDictionaryLearningInput.promptVersion` 相应放宽为可选：`server` 归属下版本号由服务端掌握。
+因此 `parseVoiceRefineRequest` 接受两种信封形态：`[system, user]` 与仅 `[user]`。user 消息恒为最后一条（它承载服务端据以分发的 `schemaName`），只给 system 而没有 user 属于非法请求。`VoiceDictationRefinementInput.promptVersion` 与 `VoiceDictionaryLearningInput.promptVersion` 的类型相应放宽为可选，但**具体是否允许出现由归属决定**——详见下文「组合解析」一节的字段约束表。
 
 ## 词典学习入口
 
@@ -60,9 +60,16 @@
 | `refine`（缺省）      | `client` / `server` | 两种都可                           |
 | `dictionary_learning` | 仅 `server`         | 仅 `dictation_dictionary_learning` |
 
-`promptVersion` 的必填性由归属决定：`client` 下仍然必填（它标识客户端那份 prompt 并参与 cache key），`server` 下可省略。单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。`dictionary_learning` 路由与 `promptOwner: 'client'` 自相矛盾，两者同时给出会被拒收。
+`promptVersion` 与 `prompt_cache_key` 都严格跟随归属，两者的理由相同——它们标识的是「哪份 prompt」，而 server 归属下客户端从未见过那份 prompt：
 
-`prompt_cache_key` 同样受归属约束：`server` 归属下客户端无从派生能对上服务端实际 prompt 的 key，因此**必须缺省**，由服务端生成。组合解析会拒收 server 归属却携带该字段的请求——否则把校验后的 request 直接转发上游，等于让调用方为自己没见过的 prompt 指定缓存分片。
+| 字段                       | `client` 归属                                 | `server` 归属              |
+| -------------------------- | --------------------------------------------- | -------------------------- |
+| `input.promptVersion`      | 必填（标识客户端那份 prompt，参与 cache key） | **必须缺省**               |
+| `request.prompt_cache_key` | 客户端自行派生                                | **必须缺省**，由服务端生成 |
+
+放行调用方在 server 归属下给出的这两个字段，等于让它为自己没见过的 prompt 指定版本或缓存分片——服务端若信任校验后的结果继续转发，就成了攻击者可控的元数据。因此组合解析对两者一律拒收。
+
+单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。`dictionary_learning` 路由与 `promptOwner: 'client'` 自相矛盾，两者同时给出会被拒收。
 
 ## 运行时校验
 

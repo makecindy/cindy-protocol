@@ -421,6 +421,22 @@ describe('route-aware combined parsing', () => {
     ).toBe(true);
   });
 
+  it('rejects a caller-supplied promptVersion when the server owns the prompt', () => {
+    // Mirror of the cache-key rule: under server ownership the version is the
+    // server's, so a caller-supplied one is attacker-controlled metadata a
+    // handler might select or cache against.
+    expectReject(
+      envelope(VALID_REFINEMENT_PAYLOAD),
+      parseVoiceRefineRequestWithPayload,
+      'promptVersion must be absent',
+    );
+    expect(parseVoiceRefineRequestWithPayload(envelope(SERVER_OWNED_REFINEMENT_PAYLOAD)).ok).toBe(
+      true,
+    );
+    // Owner-agnostic standalone callers stay permissive.
+    expect(parseVoiceRefinerUserPayload(VALID_REFINEMENT_PAYLOAD).ok).toBe(true);
+  });
+
   it('rejects a caller-supplied cache key when the server owns the prompt', () => {
     // Forwarding it would let a caller pick the cache shard for a prompt it
     // never saw; under server ownership the key is the server's to generate.

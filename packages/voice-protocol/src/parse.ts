@@ -217,17 +217,26 @@ export function parseVoiceRefineRequest(value: unknown): VoiceParseResult<VoiceR
 }
 
 /**
- * `promptVersion` identifies the client-owned prompt and feeds its cache key,
- * so it stays mandatory whenever the client owns the prompt. It is only
- * optional under `promptOwner: 'server'`, where the server owns both. Callers
- * that parse a payload without knowing the owner (the historical single-arg
- * form) get the permissive check.
+ * `promptVersion` identifies the prompt a payload was built for and feeds its
+ * cache key, so it tracks prompt ownership exactly:
+ *
+ * - `client`: mandatory — dropping it would silently lose the cache-key input.
+ * - `server`: must be absent — the server owns both the prompt and its version,
+ *   so a caller-supplied one is attacker-controlled metadata that a handler
+ *   might select or cache against (same reasoning as `prompt_cache_key`).
+ * - unknown (the historical single-arg form): permissive.
  */
-function promptVersionError(value: unknown, path: string, required: boolean): string | null {
+function promptVersionError(
+  value: unknown,
+  path: string,
+  promptOwner: VoicePromptOwner | undefined,
+): string | null {
   const options = { min: 1, max: 80 } as const;
-  return required
-    ? stringError(value, `${path}.promptVersion`, options)
-    : optionalStringError(value, `${path}.promptVersion`, options);
+  if (promptOwner === 'client') return stringError(value, `${path}.promptVersion`, options);
+  if (promptOwner === 'server' && value !== undefined) {
+    return `${path}.promptVersion must be absent when the server owns the prompt`;
+  }
+  return optionalStringError(value, `${path}.promptVersion`, options);
 }
 
 function validateRefinementContext(value: unknown, path: string): string | null {
@@ -253,7 +262,7 @@ function validateRefinementContext(value: unknown, path: string): string | null 
 function validateDictationRefinementInput(
   value: unknown,
   path: string,
-  requirePromptVersion: boolean,
+  promptOwner: VoicePromptOwner | undefined,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   const keys = [
@@ -264,7 +273,7 @@ function validateDictationRefinementInput(
     'userDictionaryMatches',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  let error = promptVersionError(value.promptVersion, path, requirePromptVersion);
+  let error = promptVersionError(value.promptVersion, path, promptOwner);
   if (error) return error;
   error = validateRefinementContext(value.context, `${path}.context`);
   if (error) return error;
@@ -363,7 +372,7 @@ function validateDictionaryLearningContext(value: unknown, path: string): string
 function validateDictionaryLearningInput(
   value: unknown,
   path: string,
-  requirePromptVersion: boolean,
+  promptOwner: VoicePromptOwner | undefined,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   const keys = [
@@ -378,7 +387,7 @@ function validateDictionaryLearningInput(
     'existingCandidates',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  let error = promptVersionError(value.promptVersion, path, requirePromptVersion);
+  let error = promptVersionError(value.promptVersion, path, promptOwner);
   if (error) return error;
   if (value.debug !== undefined && typeof value.debug !== 'boolean') {
     return `${path}.debug must be a boolean when present`;
@@ -436,7 +445,7 @@ export function parseVoiceRefinerUserPayload(
     return fail('payload.schemaName is required');
   }
 
-  const requirePromptVersion = options?.promptOwner === 'client';
+  const promptOwner = options?.promptOwner;
   if (options?.route === 'dictionary_learning') {
     // Server-owned only, so a caller asserting client ownership on this route
     // is self-contradictory — reject it rather than silently validating a
@@ -452,9 +461,9 @@ export function parseVoiceRefinerUserPayload(
 
   let error: string | null;
   if (value.schemaName === 'dictation_refinement') {
-    error = validateDictationRefinementInput(value.input, 'payload.input', requirePromptVersion);
+    error = validateDictationRefinementInput(value.input, 'payload.input', promptOwner);
   } else if (value.schemaName === 'dictation_dictionary_learning') {
-    error = validateDictionaryLearningInput(value.input, 'payload.input', requirePromptVersion);
+    error = validateDictionaryLearningInput(value.input, 'payload.input', promptOwner);
   } else {
     return fail('payload.schemaName is unsupported');
   }
