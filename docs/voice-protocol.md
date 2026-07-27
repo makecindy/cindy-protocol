@@ -49,12 +49,26 @@
 
 原因是触发时机：词典学习发生在用户改动已插入文本之后，此时 ASR 会话与其一次性 ticket 已经回收，`/api/voice/sessions/:sessionId/refine` 不再可用。该端点始终由服务端提供 prompt，不需要 `promptOwner` 协商；旧服务端没有这个路由，客户端按 404 静默跳过即可。
 
+## 组合解析（服务端首选入口）
+
+信封与 payload 的契约是**耦合**的：server-owned 信封才允许省略 `promptVersion`；词典学习路由必须拒绝调用方自带的 system prompt 与非词典学习 payload。分别调用两个 parser 无法表达这层耦合，会迫使业务层写零散的补充检查。
+
+因此服务端应优先使用 `parseVoiceRefineRequestWithPayload(body, { route })`：它一次完成信封解析、prompt 归属推导（有 system 即 `client`）、以及按归属和路由收紧的 payload 校验，返回 `{ request, payload, promptOwner }`。
+
+| route                 | 允许的归属          | 允许的 schema                      |
+| --------------------- | ------------------- | ---------------------------------- |
+| `refine`（缺省）      | `client` / `server` | 两种都可                           |
+| `dictionary_learning` | 仅 `server`         | 仅 `dictation_dictionary_learning` |
+
+`promptVersion` 的必填性由归属决定：`client` 下仍然必填（它标识客户端那份 prompt 并参与 cache key），`server` 下可省略。单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。
+
 ## 运行时校验
 
 两端必须通过包内 parser 处理不可信输入：
 
 - `parseCreateVoiceSessionRequest`
 - `parseCreateVoiceSessionResponse`
+- `parseVoiceRefineRequestWithPayload`（refine / 词典学习端点的首选入口，见上节）
 - `parseVoiceRefineRequest`
 - `parseVoiceRefinerUserPayloadJson`
 - `parseVoiceErrorResponse`

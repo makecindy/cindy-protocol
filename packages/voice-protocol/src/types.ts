@@ -189,6 +189,28 @@ export interface VoiceRefineRequest {
   messages: [VoiceRefineSystemMessage, VoiceRefineUserMessage] | [VoiceRefineUserMessage];
 }
 
+/**
+ * Which endpoint a refine-shaped request arrived on. The envelope alone cannot
+ * express this, but the two routes have different contracts, so the parser
+ * needs it to reject cross-route payloads:
+ *
+ * - `refine` (`/api/voice/sessions/:id/refine`): both prompt owners are legal
+ *   and both schemas are accepted.
+ * - `dictionary_learning` (`/api/voice/dictionary-learning`): server-owned only,
+ *   and the payload must be `dictation_dictionary_learning`. Without this the
+ *   session-less route would accept a caller-supplied system prompt.
+ */
+export const VOICE_REFINE_ROUTES = ['refine', 'dictionary_learning'] as const;
+export type VoiceRefineRoute = (typeof VOICE_REFINE_ROUTES)[number];
+
+/** Cross-validated envelope + payload, with the prompt owner it implies. */
+export interface VoiceRefineRequestWithPayload {
+  request: VoiceRefineRequest;
+  payload: VoiceRefinerUserPayload;
+  /** Derived from the envelope: a system message means the client owns it. */
+  promptOwner: VoicePromptOwner;
+}
+
 /** Shared HTTP error envelope used by voice-server. */
 export interface VoiceErrorResponse {
   error: {

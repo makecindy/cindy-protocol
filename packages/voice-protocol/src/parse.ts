@@ -14,6 +14,8 @@ import {
   type VoicePromptOwner,
   type VoiceProtocolProfile,
   type VoiceRefineRequest,
+  type VoiceRefineRequestWithPayload,
+  type VoiceRefineRoute,
   type VoiceRefinerUserPayload,
 } from './types';
 
@@ -214,6 +216,20 @@ export function parseVoiceRefineRequest(value: unknown): VoiceParseResult<VoiceR
   return ok(value as unknown as VoiceRefineRequest);
 }
 
+/**
+ * `promptVersion` identifies the client-owned prompt and feeds its cache key,
+ * so it stays mandatory whenever the client owns the prompt. It is only
+ * optional under `promptOwner: 'server'`, where the server owns both. Callers
+ * that parse a payload without knowing the owner (the historical single-arg
+ * form) get the permissive check.
+ */
+function promptVersionError(value: unknown, path: string, required: boolean): string | null {
+  const options = { min: 1, max: 80 } as const;
+  return required
+    ? stringError(value, `${path}.promptVersion`, options)
+    : optionalStringError(value, `${path}.promptVersion`, options);
+}
+
 function validateRefinementContext(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   const limits: Readonly<Record<string, number>> = {
@@ -234,7 +250,11 @@ function validateRefinementContext(value: unknown, path: string): string | null 
   return null;
 }
 
-function validateDictationRefinementInput(value: unknown, path: string): string | null {
+function validateDictationRefinementInput(
+  value: unknown,
+  path: string,
+  requirePromptVersion: boolean,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   const keys = [
     'promptVersion',
@@ -244,11 +264,7 @@ function validateDictationRefinementInput(value: unknown, path: string): string 
     'userDictionaryMatches',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  // Optional since server-owned prompts: the server then owns the version too.
-  let error = optionalStringError(value.promptVersion, `${path}.promptVersion`, {
-    min: 1,
-    max: 80,
-  });
+  let error = promptVersionError(value.promptVersion, path, requirePromptVersion);
   if (error) return error;
   error = validateRefinementContext(value.context, `${path}.context`);
   if (error) return error;
@@ -344,7 +360,11 @@ function validateDictionaryLearningContext(value: unknown, path: string): string
   return null;
 }
 
-function validateDictionaryLearningInput(value: unknown, path: string): string | null {
+function validateDictionaryLearningInput(
+  value: unknown,
+  path: string,
+  requirePromptVersion: boolean,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   const keys = [
     'promptVersion',
@@ -358,11 +378,7 @@ function validateDictionaryLearningInput(value: unknown, path: string): string |
     'existingCandidates',
   ];
   if (!hasOnlyKeys(value, keys)) return `${path} contains an unknown field`;
-  // Optional since server-owned prompts: the server then owns the version too.
-  let error = optionalStringError(value.promptVersion, `${path}.promptVersion`, {
-    min: 1,
-    max: 80,
-  });
+  let error = promptVersionError(value.promptVersion, path, requirePromptVersion);
   if (error) return error;
   if (value.debug !== undefined && typeof value.debug !== 'boolean') {
     return `${path}.debug must be a boolean when present`;
@@ -395,8 +411,21 @@ function validateDictionaryLearningInput(value: unknown, path: string): string |
   );
 }
 
+export interface VoiceRefinerUserPayloadOptions {
+  /**
+   * When known, tightens validation to that owner's contract: `client` keeps
+   * `promptVersion` mandatory. Omit it only when the owner genuinely cannot be
+   * determined — prefer {@link parseVoiceRefineRequestWithPayload}, which
+   * derives the owner from the envelope.
+   */
+  promptOwner?: VoicePromptOwner;
+  /** Restricts the accepted schema; see {@link VoiceRefineRoute}. */
+  route?: VoiceRefineRoute;
+}
+
 export function parseVoiceRefinerUserPayload(
   value: unknown,
+  options?: VoiceRefinerUserPayloadOptions,
 ): VoiceParseResult<VoiceRefinerUserPayload> {
   if (!isPlainObject(value)) return fail('payload must be an object');
   if (!hasOnlyKeys(value, ['schemaName', 'input'])) {
@@ -407,11 +436,19 @@ export function parseVoiceRefinerUserPayload(
     return fail('payload.schemaName is required');
   }
 
+  const requirePromptVersion = options?.promptOwner === 'client';
+  if (
+    options?.route === 'dictionary_learning' &&
+    value.schemaName !== 'dictation_dictionary_learning'
+  ) {
+    return fail('payload.schemaName must be dictation_dictionary_learning on this route');
+  }
+
   let error: string | null;
   if (value.schemaName === 'dictation_refinement') {
-    error = validateDictationRefinementInput(value.input, 'payload.input');
+    error = validateDictationRefinementInput(value.input, 'payload.input', requirePromptVersion);
   } else if (value.schemaName === 'dictation_dictionary_learning') {
-    error = validateDictionaryLearningInput(value.input, 'payload.input');
+    error = validateDictionaryLearningInput(value.input, 'payload.input', requirePromptVersion);
   } else {
     return fail('payload.schemaName is unsupported');
   }
@@ -420,6 +457,7 @@ export function parseVoiceRefinerUserPayload(
 
 export function parseVoiceRefinerUserPayloadJson(
   raw: string,
+  options?: VoiceRefinerUserPayloadOptions,
 ): VoiceParseResult<VoiceRefinerUserPayload> {
   if (raw.length > VOICE_MAX_REFINER_PAYLOAD_CHARS) {
     return fail(`payload too large: ${raw.length} > ${VOICE_MAX_REFINER_PAYLOAD_CHARS} chars`);
@@ -430,7 +468,41 @@ export function parseVoiceRefinerUserPayloadJson(
   } catch {
     return fail('payload must be valid JSON');
   }
-  return parseVoiceRefinerUserPayload(value);
+  return parseVoiceRefinerUserPayload(value, options);
+}
+
+/**
+ * Single authoritative entry point for a refine-shaped HTTP body: parses the
+ * envelope, derives the prompt owner from it, then parses the user payload
+ * under that owner's contract and the route's schema restriction.
+ *
+ * Servers should prefer this over calling the envelope and payload parsers
+ * separately — the two contracts are coupled (a server-owned envelope may omit
+ * `promptVersion`; the session-less dictionary-learning route must not accept a
+ * caller-supplied prompt), and only a combined pass can enforce that coupling
+ * without ad hoc checks at the call site.
+ */
+export function parseVoiceRefineRequestWithPayload(
+  value: unknown,
+  options?: { route?: VoiceRefineRoute },
+): VoiceParseResult<VoiceRefineRequestWithPayload> {
+  const request = parseVoiceRefineRequest(value);
+  if (!request.ok) return fail(request.error);
+
+  const messages = request.value.messages;
+  const promptOwner: VoicePromptOwner = messages.length === 2 ? 'client' : 'server';
+  const route = options?.route ?? 'refine';
+  if (route === 'dictionary_learning' && promptOwner === 'client') {
+    return fail('request.messages must omit the system message on this route');
+  }
+
+  const payload = parseVoiceRefinerUserPayloadJson(messages[messages.length - 1].content, {
+    promptOwner,
+    route,
+  });
+  if (!payload.ok) return fail(payload.error);
+
+  return ok({ request: request.value, payload: payload.value, promptOwner });
 }
 
 export function parseVoiceErrorResponse(value: unknown): VoiceParseResult<VoiceErrorResponse> {

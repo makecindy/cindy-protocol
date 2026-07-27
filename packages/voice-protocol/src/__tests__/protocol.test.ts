@@ -11,6 +11,7 @@ import {
   parseCreateVoiceSessionResponse,
   parseVoiceErrorResponse,
   parseVoiceRefineRequest,
+  parseVoiceRefineRequestWithPayload,
   parseVoiceRefinerUserPayload,
   parseVoiceRefinerUserPayloadJson,
   type CreateVoiceSessionRequest,
@@ -330,6 +331,73 @@ describe('voice refinement contract', () => {
       parseVoiceRefinerUserPayload,
       'evidenceCount',
     );
+  });
+});
+
+describe('route-aware combined parsing', () => {
+  const learningPayload = {
+    schemaName: 'dictation_dictionary_learning',
+    input: { beforeText: '旧文本', afterText: '新文本' },
+  } satisfies VoiceRefinerUserPayload;
+
+  function envelope(payload: unknown, system?: string) {
+    const user = { role: 'user', content: JSON.stringify(payload) };
+    return { messages: system ? [{ role: 'system', content: system }, user] : [user] };
+  }
+
+  it('derives the prompt owner from the envelope', () => {
+    const serverOwned = parseVoiceRefineRequestWithPayload(envelope(learningPayload));
+    expect(serverOwned.ok && serverOwned.value.promptOwner).toBe('server');
+
+    const clientOwned = parseVoiceRefineRequestWithPayload(
+      envelope(VALID_REFINEMENT_PAYLOAD, 'a prompt'),
+    );
+    expect(clientOwned.ok && clientOwned.value.promptOwner).toBe('client');
+    expect(clientOwned.ok && clientOwned.value.payload).toEqual(VALID_REFINEMENT_PAYLOAD);
+  });
+
+  it('keeps promptVersion mandatory for client-owned payloads', () => {
+    // The relaxation is scoped to server-owned prompts: a client-owned request
+    // that drops the version would silently lose the cache-key input that
+    // identifies the prompt it was built for.
+    expectReject(
+      envelope(SERVER_OWNED_REFINEMENT_PAYLOAD, 'a prompt'),
+      parseVoiceRefineRequestWithPayload,
+      'promptVersion',
+    );
+    expect(parseVoiceRefineRequestWithPayload(envelope(SERVER_OWNED_REFINEMENT_PAYLOAD)).ok).toBe(
+      true,
+    );
+  });
+
+  it('locks the dictionary-learning route to server-owned learning payloads', () => {
+    expect(
+      parseVoiceRefineRequestWithPayload(envelope(learningPayload), {
+        route: 'dictionary_learning',
+      }).ok,
+    ).toBe(true);
+    // A caller-supplied prompt on the session-less route would bypass the
+    // server's own prompt injection.
+    expectReject(
+      { value: envelope(learningPayload, 'attacker prompt') },
+      (input: { value: unknown }) =>
+        parseVoiceRefineRequestWithPayload(input.value, { route: 'dictionary_learning' }),
+      'must omit the system message',
+    );
+    // So would smuggling a refinement payload onto it.
+    expectReject(
+      { value: envelope(SERVER_OWNED_REFINEMENT_PAYLOAD) },
+      (input: { value: unknown }) =>
+        parseVoiceRefineRequestWithPayload(input.value, { route: 'dictionary_learning' }),
+      'must be dictation_dictionary_learning',
+    );
+  });
+
+  it('leaves the standalone payload parser permissive for owner-agnostic callers', () => {
+    expect(parseVoiceRefinerUserPayload(SERVER_OWNED_REFINEMENT_PAYLOAD).ok).toBe(true);
+    expect(
+      parseVoiceRefinerUserPayload(SERVER_OWNED_REFINEMENT_PAYLOAD, { promptOwner: 'client' }).ok,
+    ).toBe(false);
   });
 });
 
