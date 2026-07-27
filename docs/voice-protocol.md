@@ -69,7 +69,7 @@
 
 放行调用方在 server 归属下给出的这两个字段，等于让它为自己没见过的 prompt 指定版本或缓存分片——服务端若信任校验后的结果继续转发，就成了攻击者可控的元数据。因此组合解析对两者一律拒收。
 
-单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；不传则保持宽松，供确实无法判定归属的调用方使用。`dictionary_learning` 路由与 `promptOwner: 'client'` 自相矛盾，两者同时给出会被拒收。
+单独调用 `parseVoiceRefinerUserPayload` 时可传 `{ promptOwner, route }` 得到同样的收紧；两者都不传才保持宽松，供确实无法判定归属的调用方使用。其中 `route: 'dictionary_learning'` 本身就确立了归属：只传它也会按 server 归属校验，无需再传 `promptOwner`；显式传 `promptOwner: 'client'` 与该路由自相矛盾，会被拒收。
 
 ## 运行时校验
 

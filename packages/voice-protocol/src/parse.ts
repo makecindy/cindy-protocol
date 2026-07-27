@@ -445,18 +445,22 @@ export function parseVoiceRefinerUserPayload(
     return fail('payload.schemaName is required');
   }
 
-  const promptOwner = options?.promptOwner;
+  let promptOwner = options?.promptOwner;
   if (options?.route === 'dictionary_learning') {
     // Server-owned only, so a caller asserting client ownership on this route
     // is self-contradictory — reject it rather than silently validating a
     // forbidden combination for consumers that parse envelope and payload
     // separately.
-    if (options.promptOwner === 'client') {
+    if (promptOwner === 'client') {
       return fail('payload cannot be client-owned on this route');
     }
     if (value.schemaName !== 'dictation_dictionary_learning') {
       return fail('payload.schemaName must be dictation_dictionary_learning on this route');
     }
+    // The route itself establishes ownership, so a caller that passes only
+    // `route` still gets the server-owned field rules (no caller-supplied
+    // promptVersion) rather than the permissive owner-unknown ones.
+    promptOwner = 'server';
   }
 
   let error: string | null;

@@ -400,6 +400,21 @@ describe('route-aware combined parsing', () => {
     ).toBe(false);
   });
 
+  it('infers server ownership from the dictionary-learning route alone', () => {
+    // Passing only `route` must still apply the server-owned field rules —
+    // otherwise a caller-supplied promptVersion slips through route-aware
+    // validation on a route that is server-owned by definition.
+    expectReject(
+      { value: { ...learningPayload, input: { ...learningPayload.input, promptVersion: 'v1' } } },
+      (input: { value: unknown }) =>
+        parseVoiceRefinerUserPayload(input.value, { route: 'dictionary_learning' }),
+      'promptVersion must be absent',
+    );
+    expect(parseVoiceRefinerUserPayload(learningPayload, { route: 'dictionary_learning' }).ok).toBe(
+      true,
+    );
+  });
+
   it('rejects client ownership on the dictionary-learning route in the standalone parser', () => {
     // The route is server-owned by definition, so this option combination is
     // self-contradictory. Consumers that parse envelope and payload separately
