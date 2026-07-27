@@ -15,13 +15,14 @@ the client repository.
 
 ## Packages
 
-| Package                       | Contents                                                                                                                                                                                                  | Consumers                                                               |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `@cindy/slack-hook-protocol`  | hook server ↔ desktop duplex task protocol: envelope, message types, runtime validation, builders                                                                                                         | desktop (hook-control), slack-hook-server                               |
-| `@cindy/device-link-protocol` | device-link relay-layer protocol: envelope, routing semantics (ROUTED/CONTROL kinds), connection-layer payloads. Tunnel-layer payloads are opaque to the relay and stay in the client device-link package | desktop/mobile (device-link package), device-link-server                |
-| `@cindy/plugin-protocol`      | Ghost package `ghost.json` types and validator, plus the Plugin list/detail/download DTOs and response parsers the Desktop client needs                                                                   | plugin-server; Desktop consumes it in a later remote-Plugin integration |
-| `@cindy/skill-protocol`       | Skill package manifests plus the Skill list/detail/download DTOs and response parsers the Desktop client needs                                                                                            | plugin-server Skill Domain and the Desktop Skill marketplace            |
-| `@cindy/voice-protocol`       | desktop/mobile ↔ voice-server voice control plane: sessions, one-shot tickets, ASR target descriptors, refine payloads, and runtime validation                                                            | desktop, mobile, voice-server                                           |
+| Package                        | Contents                                                                                                                                                                                                  | Consumers                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `@cindy/slack-hook-protocol`   | hook server ↔ desktop duplex task protocol: envelope, message types, runtime validation, builders                                                                                                         | desktop (hook-control), slack-hook-server                               |
+| `@cindy/device-link-protocol`  | device-link relay-layer protocol: envelope, routing semantics (ROUTED/CONTROL kinds), connection-layer payloads. Tunnel-layer payloads are opaque to the relay and stay in the client device-link package | desktop/mobile (device-link package), device-link-server                |
+| `@cindy/plugin-protocol`       | Ghost package `ghost.json` types and validator, plus the Plugin list/detail/download DTOs and response parsers the Desktop client needs                                                                   | plugin-server; Desktop consumes it in a later remote-Plugin integration |
+| `@cindy/skill-protocol`        | Skill package manifests plus the Skill list/detail/download DTOs and response parsers the Desktop client needs                                                                                            | plugin-server Skill Domain and the Desktop Skill marketplace            |
+| `@cindy/voice-protocol`        | desktop/mobile ↔ voice-server voice control plane: sessions, one-shot tickets, ASR target descriptors, refine payloads, and runtime validation                                                            | desktop, mobile, voice-server                                           |
+| `@cindy/model-access-protocol` | model-access-server ↔ desktop/mobile model catalog responses, price currency, and runtime validation                                                                                                      | model-access-server, desktop/mobile model pickers                       |
 
 ## Protocol docs
 
@@ -30,6 +31,7 @@ the client repository.
 - [plugin-protocol](docs/plugin-protocol.md) — Ghost manifest and Plugin HTTP delivery contract (version boundaries, compatibility strategy)
 - [skill-protocol](docs/skill-protocol.md) — Skill package manifest and marketplace HTTP delivery contract (scopes and compatibility strategy)
 - [voice-protocol](docs/voice-protocol.md) — voice control-plane protocol (sessions, one-shot tickets, refine payloads, compatibility strategy)
+- [model-access-protocol](docs/model-access-protocol.md) — model catalog, price currency, and compatibility
 
 > The protocol docs are currently Chinese-only. English translations are
 > welcome — see [CONTRIBUTING](CONTRIBUTING.en.md).
