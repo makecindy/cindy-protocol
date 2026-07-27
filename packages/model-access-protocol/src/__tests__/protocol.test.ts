@@ -84,4 +84,49 @@ describe('model access catalog contract', () => {
       'response.models[0].tieredPricing[0].range',
     );
   });
+
+  it('rejects defaults that are absent from the declared effort list', () => {
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [{ ...VALID_RESPONSE.models[0], efforts: ['low'], defaultEffort: 'high' }],
+      },
+      'response.models[0].defaultEffort',
+    );
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [
+          {
+            ...VALID_RESPONSE.models[0],
+            perAgent: { codex: { efforts: ['low'], defaultEffort: 'high' } },
+          },
+        ],
+      },
+      'response.models[0].perAgent.codex.defaultEffort',
+    );
+  });
+
+  it('rejects duplicate ids and overrides for unsupported agents', () => {
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [{ ...VALID_RESPONSE.models[0] }, { ...VALID_RESPONSE.models[0] }],
+      },
+      'response.models[1].id',
+    );
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [
+          {
+            ...VALID_RESPONSE.models[0],
+            agents: ['claude-code'],
+            perAgent: { codex: { supportsFastMode: true } },
+          },
+        ],
+      },
+      'response.models[0].perAgent.codex',
+    );
+  });
 });

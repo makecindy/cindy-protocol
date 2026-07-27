@@ -112,7 +112,11 @@ function effortListError(value: unknown, path: string): string | null {
   return null;
 }
 
-function overrideError(value: unknown, path: string): string | null {
+function overrideError(
+  value: unknown,
+  path: string,
+  baseEfforts: readonly ModelEffort[] | undefined,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
@@ -120,6 +124,17 @@ function overrideError(value: unknown, path: string): string | null {
   if (error) return error;
   if (value.defaultEffort !== undefined && !isModelEffort(value.defaultEffort)) {
     return `${path}.defaultEffort must be a supported effort value when present`;
+  }
+  const effectiveEfforts =
+    Array.isArray(value.efforts) && value.efforts.every(isModelEffort)
+      ? (value.efforts as ModelEffort[])
+      : baseEfforts;
+  if (
+    value.defaultEffort !== undefined &&
+    effectiveEfforts !== undefined &&
+    !effectiveEfforts.includes(value.defaultEffort as ModelEffort)
+  ) {
+    return `${path}.defaultEffort must be included in ${path}.efforts or the base efforts`;
   }
   for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
@@ -174,6 +189,7 @@ function modelEntryError(value: unknown, path: string): string | null {
   ) {
     return `${path}.agents must be a non-empty array of supported agents`;
   }
+  const supportedAgents = value.agents as ModelAgent[];
 
   for (const [key, max] of [
     ['name', 256],
@@ -191,6 +207,17 @@ function modelEntryError(value: unknown, path: string): string | null {
   if (error) return error;
   if (value.defaultEffort !== undefined && !isModelEffort(value.defaultEffort)) {
     return `${path}.defaultEffort must be a supported effort value when present`;
+  }
+  const efforts =
+    Array.isArray(value.efforts) && value.efforts.every(isModelEffort)
+      ? (value.efforts as ModelEffort[])
+      : undefined;
+  if (
+    value.defaultEffort !== undefined &&
+    efforts !== undefined &&
+    !efforts.includes(value.defaultEffort as ModelEffort)
+  ) {
+    return `${path}.defaultEffort must be included in ${path}.efforts`;
   }
   error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
   if (error) return error;
@@ -213,7 +240,10 @@ function modelEntryError(value: unknown, path: string): string | null {
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
     for (const [agent, override] of Object.entries(value.perAgent)) {
       if (!isModelAgent(agent)) return `${path}.perAgent.${agent} is not a supported agent`;
-      error = overrideError(override, `${path}.perAgent.${agent}`);
+      if (!supportedAgents.includes(agent)) {
+        return `${path}.perAgent.${agent} must be included in ${path}.agents`;
+      }
+      error = overrideError(override, `${path}.perAgent.${agent}`, efforts);
       if (error) return error;
     }
   }
@@ -228,7 +258,14 @@ export function parseListModelsResponse(
     return fail(`response.schemaVersion must be ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`);
   }
   if (!Array.isArray(value.models)) return fail('response.models must be an array');
+  const modelIds = new Set<string>();
   for (const [index, model] of value.models.entries()) {
+    if (isPlainObject(model) && typeof model.id === 'string') {
+      if (modelIds.has(model.id)) {
+        return fail(`response.models[${index}].id must be unique`);
+      }
+      modelIds.add(model.id);
+    }
     const error = modelEntryError(model, `response.models[${index}]`);
     if (error) return fail(error);
   }
