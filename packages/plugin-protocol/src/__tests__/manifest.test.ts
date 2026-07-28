@@ -28,6 +28,134 @@ describe('Ghost manifest contract', () => {
     expect(validateGhostManifest({ ...validManifest, schemaVersion: 1 }).ok).toBe(false);
   });
 
+  it('accepts and normalizes Plugin locale resource declarations', () => {
+    const locales = {
+      en: 'locales/en.json',
+      'zh-CN': 'locales/zh-CN.json',
+      ja: 'locales/ja.json',
+      ko: 'locales/ko.json',
+    };
+    const result = validateGhostManifest({ ...validManifest, locales });
+
+    expect(result).toEqual({
+      ok: true,
+      manifest: { ...validManifest, locales },
+    });
+  });
+
+  it('rejects locale declarations without English fallback or with unsafe conflicts', () => {
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: { ja: 'locales/ja.json' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('必须提供 en'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: { en: 'index.js' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('以 .json 结尾'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: { en: 'ghost.json' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件其他声明文件'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: {
+          en: 'locales/en.json',
+          ja: 'locales/EN.json',
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('重复路径'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: {
+          en: 'locales/en.json',
+          fr: 'locales/fr.json',
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不支持的语言'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['tool', 'skill'],
+        locales: { en: 'skills/helper.json' },
+        skill: {
+          items: [
+            {
+              dir: 'skills/helper.json',
+              name: 'helper',
+              description: 'Help with example tasks.',
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件其他声明文件'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['tool', 'skill'],
+        locales: { en: 'skills/helper.json' },
+        skill: {
+          items: [
+            {
+              dir: 'skills/helper.json/subskill',
+              name: 'helper',
+              description: 'Help with example tasks.',
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件其他声明文件'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        slots: ['tool', 'skill'],
+        locales: { en: 'skills/helper/locales/en.json' },
+        skill: {
+          items: [
+            {
+              dir: 'skills/helper',
+              name: 'helper',
+              description: 'Help with example tasks.',
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      manifest: expect.objectContaining({
+        locales: { en: 'skills/helper/locales/en.json' },
+      }),
+    });
+  });
+
   it('rejects Windows reserved device names in ids and relative paths', () => {
     expect(isValidGhostId('con')).toBe(false);
     expect(isValidGhostId('com1')).toBe(false);

@@ -53,6 +53,31 @@ const manifest: GhostManifest = result.manifest;
 
 成功结果是只包含协议已知字段的规范化对象；`kind` 等有缺省语义的字段会被补齐。不要在校验前把 `unknown` 强转为 `GhostManifest`，也不要在服务端或 Desktop 另写一套 manifest 校验规则。
 
+### Manifest 本地化资源
+
+Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包内 JSON 资源：
+
+```json
+{
+  "locales": {
+    "en": "locales/en.json",
+    "zh-CN": "locales/zh-CN.json",
+    "ja": "locales/ja.json",
+    "ko": "locales/ko.json"
+  }
+}
+```
+
+- 支持语言固定为 `zh-CN`、`en`、`ja`、`ko`；声明 `locales` 时必须包含
+  `en`，供宿主语言不受支持或目标资源缺失时回退。
+- 每条值必须是包内安全相对路径并以 `.json` 结尾；不同语言不能复用大小写
+  折叠后相同的路径，也不能与 `ghost.json`、入口、图标、设置页、面板、Node
+  入口或 Skill 目录冲突。
+- 单个 locale JSON 的大小上限由 `GHOST_LOCALE_MAX_BYTES` 固定为 64 KiB。
+  包文件存在性、UTF-8 JSON 和资源内容由打包、发布及安装侧在读取制品时校验。
+- 这是 schema v2 的可选追加字段，不需要提升 manifest 版本。旧消费方会按未知
+  字段忽略并继续使用顶层文案；支持该字段的消费方按宿主语言读取资源。
+
 ### Node Worker 凭证绑定
 
 声明了 `node` 槽的插件可以通过 `node.secretBindings` 请求主机把用户凭证安全持久化，并仅在指定 Worker 入口和 JSON-RPC 方法同时命中时临时注入：
