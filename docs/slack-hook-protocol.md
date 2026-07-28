@@ -25,6 +25,7 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 13. **多 workspace 绑定(multi-team)**:`bind.state` 快照帧 + 各帧可选 `teamId` —— 一台设备可同时持有多个 (teamId, slackUserId) 绑定;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_MULTI_TEAM`),任一侧缺席回落单绑定行为
 14. **多 provider**:`provider.bind.*` / `provider.prefs.*` —— 在不改变 Slack 旧帧的前提下追加统一的 provider 绑定与偏好通道
 15. **最近会话**:`query.kind=sessions` —— Telegram `/session` 仅拉取最多 20 条脱敏会话摘要
+16. **群消息中继(group-relay)**:`group.message` —— server 把群消息实时转发给该群已知绑定成员的桌面(fire-and-forget),滚动窗口与上下文拼装全部在 desktop 本地;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_GROUP_RELAY='group-relay-v1'`)
 
 ## 2. 核心设计原则
 
@@ -146,6 +147,14 @@ interface HookEnvelope<TType, TPayload> {
 ### 阶段 13 多 workspace 绑定(multi-team)增量
 
 新帧 `bind.state` 见阶段 5 表。其余为已有帧的可选 `teamId` 扩展(多绑定下的归属消歧,缺省 = 设备唯一绑定的旧语义):`bind.start` / `bind.update` / `bind.revoke`(见阶段 5)、`prefs.set` 与 `prefs.state` 条目、`tool.request`、`task.dispatch.source`(`teamId` + `teamName`,供会话标题与工具默认 team)。能力协商双向:desktop 在 `hello.features`、server 在 `welcome.features` 各自声明 `HOOK_FEATURE_MULTI_TEAM`,任一侧缺席则整体回落单绑定行为。
+
+### 阶段 14 群消息中继(group-relay)增量
+
+| 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                       |
+| --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group.message` | server → desktop | 实时转发一条群消息,fire-and-forget(无 ack,桌面离线即丢)。`provider`(开放集合)、`chatId` / `threadId`(null=主群流)/ `messageId`(反查 id,与 task.dispatch 引用块、桌面窗口条目同键关联)、`chatName`、`author{name,isBot?}`、`text`(≤4k,可空)、`fileNames?`(仅文件名)、`sentAt`(unix ms) |
+
+设计边界(2026-07-28 决策):**群聊内容不得驻留在 server**(内存亦不允许)——server 收到群消息后对已声明 `group-relay-v1` 的成员桌面转发即弃;server 侧仅可存 `chatId ↔ principal` 成员元数据(id 级,无内容)用于路由。滚动窗口、增量游标与上下文拼装全部在 desktop 本地完成。与 Slack 通道「平台即存储、按需拉取」同构;Telegram 无历史 API,存储方为用户自己的设备。一次性凭证(如绑定深链 `/start <token>`)由 server 过滤,不转发。
 
 ## 6. 典型时序
 

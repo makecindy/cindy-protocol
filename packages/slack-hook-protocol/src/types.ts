@@ -143,6 +143,7 @@ export const HOOK_MESSAGE_TYPES = [
   'tool.request',
   'tool.response',
   'bind.state',
+  'group.message',
 ] as const;
 
 export type HookMessageType = (typeof HOOK_MESSAGE_TYPES)[number];
@@ -941,6 +942,52 @@ export interface ToolResponsePayload {
   error?: ToolErrorShape | null;
 }
 
+// ── 阶段 14: 群消息中继(group-relay-v1) ─────────────────────────────────────
+
+/**
+ * 双向能力标识: 群消息实时中继。desktop 在 hello.features 声明会消费
+ * group.message 帧(本地维护群上下文窗口); server 在 welcome.features 声明
+ * 支持。任一侧缺席则 server 不转发, desktop 无群上下文(引用注入不受影响)。
+ *
+ * 设计边界(2026-07-28 决策): 群聊内容**不得驻留在 server**(内存亦不允许),
+ * server 收到群消息后对已声明本能力的成员桌面转发即弃; 滚动窗口、增量游标与
+ * 上下文拼装全部在 desktop 本地完成 —— 与 Slack 通道「平台即存储」同构,
+ * Telegram 无历史 API, 存储方为用户自己的设备。
+ */
+export const HOOK_FEATURE_GROUP_RELAY = 'group-relay-v1';
+
+/** group.message 的发送者标识(display name, 不携带平台 user id)。 */
+export interface GroupMessageAuthor {
+  name: string;
+  /** 是否为 bot(含 Cindy 自身出站回复的回流条目)。 */
+  isBot?: boolean;
+}
+
+/**
+ * group.message(server -> desktop): 把一条群消息实时转发给该群已知绑定
+ * 成员的桌面, fire-and-forget(无 ack, 桌面离线即丢 —— 零驻留的固有代价)。
+ * chatId/threadId/messageId 是反查 id: task.dispatch 的引用块与桌面窗口
+ * 条目按同一组 id 关联, prompt 缺失上下文时 agent 可按 id 查本地窗口兜底。
+ * 一次性凭证(如 Telegram 绑定深链 /start <token>)由 server 过滤, 不转发。
+ */
+export interface GroupMessagePayload {
+  /** IM 平台标识(开放集合, 当前 'telegram')。 */
+  provider: string;
+  chatId: string;
+  /** forum topic / thread id; null = 主群流。 */
+  threadId: string | null;
+  messageId: string;
+  /** 群显示名; null = 未知。 */
+  chatName: string | null;
+  author: GroupMessageAuthor;
+  /** 正文(生产端截断后 ≤4k 字符; 可为空字符串, 如纯附件消息)。 */
+  text: string;
+  /** 附件文件名列表(仅名字, 不携带字节; 桌面窗口行内标注用)。 */
+  fileNames?: string[];
+  /** 消息在 IM 平台的发送时刻(unix ms)。 */
+  sentAt: number;
+}
+
 // ── 消息联合 ─────────────────────────────────────────────────────────────────
 
 export type HookHelloMessage = HookEnvelope<'hello', HelloPayload>;
@@ -1008,6 +1055,7 @@ export type HookProviderPrefsStateMessage = HookEnvelope<
   'provider.prefs.state',
   ProviderPrefsStatePayload
 >;
+export type HookGroupMessageMessage = HookEnvelope<'group.message', GroupMessagePayload>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -1042,7 +1090,8 @@ export type HookMessage =
   | HookProviderBindStateMessage
   | HookProviderPrefsGetMessage
   | HookProviderPrefsSetMessage
-  | HookProviderPrefsStateMessage;
+  | HookProviderPrefsStateMessage
+  | HookGroupMessageMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
