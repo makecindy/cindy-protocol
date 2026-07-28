@@ -154,6 +154,8 @@ interface HookEnvelope<TType, TPayload> {
 | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `group.message` | server → desktop | 实时转发一条群消息,fire-and-forget(无 ack,桌面离线即丢)。`provider`(开放集合)、`chatId` / `threadId`(null=主群流)/ `messageId`(反查 id,与 task.dispatch 引用块、桌面窗口条目同键关联)、`chatName`、`author{name,isBot?}`、`text`(≤4k,可空)、`fileNames?`(仅文件名)、`sentAt`(unix ms) |
 
+`task.dispatch.source` 增加可选 `triggerMessageId`(与 `group.message.messageId` 同一 id 空间):desktop 据此在本地窗口中精确剔除"当前消息";旧 server 不发时 desktop 降级为不剔重。
+
 设计边界(2026-07-28 决策):**群聊内容不得驻留在 server**(内存亦不允许)——server 收到群消息后对已声明 `group-relay-v1` 的成员桌面转发即弃;server 侧仅可存 `chatId ↔ principal` 成员元数据(id 级,无内容)用于路由。滚动窗口、增量游标与上下文拼装全部在 desktop 本地完成。与 Slack 通道「平台即存储、按需拉取」同构;Telegram 无历史 API,存储方为用户自己的设备。一次性凭证(如绑定深链 `/start <token>`)由 server 过滤,不转发。
 
 ## 6. 典型时序

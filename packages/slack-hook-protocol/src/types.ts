@@ -280,6 +280,12 @@ export interface TaskSource {
   /** 结构化 thread 上下文; 省略或空数组 = 无 thread 历史。 */
   threadContext?: ThreadContextEntry[];
   /**
+   * 触发本任务的 IM 消息 id(与 group.message.messageId 同一 id 空间)。
+   * desktop 用它在本地群窗口中精确剔除"当前消息", 避免上下文与 prompt 重复。
+   * 旧 server 不发 = null/缺省, desktop 降级为不剔重。
+   */
+  triggerMessageId?: string | null;
+  /**
    * 用户 @ bot 的干净原文(UI 显示用) —— 不含 thread 上下文与 prompt 指引。
    * desktop 据此渲染任务卡片正文, 与发给 agent 的完整 prompt 彻底分离。
    */

@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   HOOK_FEATURE_GROUP_RELAY,
   makeGroupMessage,
+  makeTaskDispatch,
   parseHookMessage,
   serializeHookMessage,
   type GroupMessagePayload,
@@ -106,5 +107,33 @@ describe('group.message(阶段 14)', () => {
 
   it('provider 是开放集合: 非 telegram 值照常通过', () => {
     roundTrip(makeGroupMessage({ ...FULL, provider: 'discord' }));
+  });
+
+  it('task.dispatch.source.triggerMessageId: 可选、非空字符串或显式 null', () => {
+    const dispatch = makeTaskDispatch({
+      requestId: 'req-1',
+      externalKey: 'telegram:group:1:-1:1:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'hi',
+      source: { im: 'telegram', userText: 'hi', triggerMessageId: '4213' },
+    });
+    roundTrip(dispatch);
+    roundTrip(
+      makeTaskDispatch({
+        ...dispatch.payload,
+        source: { im: 'telegram', triggerMessageId: null },
+      }),
+    );
+    expectReject(
+      {
+        ...dispatch,
+        payload: {
+          ...dispatch.payload,
+          source: { im: 'telegram', triggerMessageId: '' },
+        },
+      },
+      'triggerMessageId',
+    );
   });
 });

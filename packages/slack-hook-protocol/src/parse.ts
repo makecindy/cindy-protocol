@@ -171,6 +171,9 @@ function validateSource(v: unknown): string | null {
   if (v.userText !== undefined && typeof v.userText !== 'string') {
     return 'task.dispatch.source.userText must be a string when present';
   }
+  if (v.triggerMessageId !== undefined && !isNullableNonEmptyString(v.triggerMessageId)) {
+    return 'task.dispatch.source.triggerMessageId must be a non-empty string or null';
+  }
   if (v.threadContext !== undefined) {
     if (!Array.isArray(v.threadContext)) {
       return 'task.dispatch.source.threadContext must be an array when present';
