@@ -40,6 +40,7 @@ export {
   makeProviderPrefsState,
   makeToolRequest,
   makeToolResponse,
+  makeGroupMessage,
   serializeHookMessage,
   type HelloInput,
 } from './build';

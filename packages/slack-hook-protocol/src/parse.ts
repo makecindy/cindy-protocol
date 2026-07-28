@@ -852,6 +852,52 @@ function validateProviderPrefsState(p: Record<string, unknown>): string | null {
   return null;
 }
 
+// ── 阶段 14: 群消息中继 ──────────────────────────────────────────────────────
+
+const GROUP_MESSAGE_TEXT_MAX = 8_192;
+const GROUP_MESSAGE_FILE_NAMES_MAX = 20;
+const GROUP_MESSAGE_FILE_NAME_CHARS_MAX = 256;
+
+function validateGroupMessage(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.provider)) return 'group.message.provider must be a non-empty string';
+  if (!isNonEmptyString(p.chatId)) return 'group.message.chatId must be a non-empty string';
+  if (!isNullableNonEmptyString(p.threadId)) {
+    return 'group.message.threadId must be a non-empty string or null';
+  }
+  if (!isNonEmptyString(p.messageId)) return 'group.message.messageId must be a non-empty string';
+  if (!isNullableNonEmptyString(p.chatName)) {
+    return 'group.message.chatName must be a non-empty string or null';
+  }
+  if (!isPlainObject(p.author) || !isNonEmptyString(p.author.name)) {
+    return 'group.message.author.name must be a non-empty string';
+  }
+  if (p.author.isBot !== undefined && typeof p.author.isBot !== 'boolean') {
+    return 'group.message.author.isBot must be a boolean';
+  }
+  if (typeof p.text !== 'string' || p.text.length > GROUP_MESSAGE_TEXT_MAX) {
+    return `group.message.text must be a string of at most ${GROUP_MESSAGE_TEXT_MAX} chars`;
+  }
+  if (p.fileNames !== undefined) {
+    if (
+      !isStringArray(p.fileNames) ||
+      p.fileNames.length > GROUP_MESSAGE_FILE_NAMES_MAX ||
+      p.fileNames.some((name) => name.length > GROUP_MESSAGE_FILE_NAME_CHARS_MAX)
+    ) {
+      return `group.message.fileNames must be at most ${GROUP_MESSAGE_FILE_NAMES_MAX} non-empty strings of at most ${GROUP_MESSAGE_FILE_NAME_CHARS_MAX} chars`;
+    }
+  }
+  if (
+    p.text.length === 0 &&
+    (p.fileNames === undefined || (p.fileNames as string[]).length === 0)
+  ) {
+    return 'group.message must carry text or fileNames';
+  }
+  if (!isPositiveTimestamp(p.sentAt)) {
+    return 'group.message.sentAt must be a positive unix-ms timestamp';
+  }
+  return null;
+}
+
 const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) => string | null> = {
   hello: validateHello,
   welcome: validateWelcome,
@@ -885,6 +931,7 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'provider.prefs.state': validateProviderPrefsState,
   'tool.request': validateToolRequest,
   'tool.response': validateToolResponse,
+  'group.message': validateGroupMessage,
 };
 
 /**

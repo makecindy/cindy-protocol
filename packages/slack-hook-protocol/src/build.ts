@@ -38,6 +38,8 @@ import {
   type HookProviderBindStartMessage,
   type HookProviderBindStateMessage,
   type HookProviderBindUpdateMessage,
+  type GroupMessagePayload,
+  type HookGroupMessageMessage,
   type HookProviderPrefsGetMessage,
   type HookProviderPrefsSetMessage,
   type HookProviderPrefsStateMessage,
@@ -255,6 +257,10 @@ export function makeToolRequest(payload: ToolRequestPayload): HookToolRequestMes
 
 export function makeToolResponse(payload: ToolResponsePayload): HookToolResponseMessage {
   return envelope('tool.response', payload);
+}
+
+export function makeGroupMessage(payload: GroupMessagePayload): HookGroupMessageMessage {
+  return envelope('group.message', payload);
 }
 
 /** 序列化为 WS 文本帧。与 parseHookMessage 互为逆操作。 */
