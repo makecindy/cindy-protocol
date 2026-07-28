@@ -101,6 +101,42 @@
  *      当前有效值,lifecycle.preference 在设置页切换时即时更新。server
  *      只有声明 HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT 后 desktop 才发送
  *      即时更新帧;旧 server 忽略 hello 新字段,保持既有通知行为。
+ *
+ *   编号说明: 本文件头的条目号与 docs/slack-hook-protocol.md §1 的消息目录
+ *      对齐(那份是正本)。中间的跳号是因为部分帧只在下方各自的类型旁说明 ——
+ *      14 多 provider(provider.bind.* / provider.prefs.*, 见 Provider-neutral
+ *      小节)、15 最近会话(QUERY_KINDS)、16 群消息中继(GroupMessagePayload)、
+ *      17 上下线通知偏好(LifecyclePreferencePayload, 即上面那条)。
+ *
+ *   18. 续跑: turn.reopen(desktop -> server) —— 一个已经以 turn.end 收口的
+ *      任务, 在桌面端被用户续跑了, 把后续进展重新接回渠道里那条消息。
+ *
+ *      要解决的问题: turn.end(status=error)之后, 用户常在桌面端点错误横幅上
+ *      的「重试」。那会在**同一个会话**里起一个新 turn(桌面端发的是一条隐藏
+ *      续跑指令), 任务确实继续跑了, 但渠道那条消息永远停在失败上 —— 因为
+ *      turn.progress / turn.end 都以 requestId 为键, 那一轮已经收口, 协议里
+ *      也没有任何"会话级"通道能让 desktop 主动往那条消息写东西。用户看到的
+ *      就是"点了重试也没反应"。
+ *
+ *      形态刻意用**新 requestId + reopenOf**, 而不是复用原 requestId:
+ *        - server 侧幂等语义不用改(原 requestId 的 turn.end 仍是一次性的),
+ *          只需把 reopenOf 指向的那条消息的位置(channel + ts)登记给新
+ *          requestId, 之后的 turn.progress / turn.end 走既有代码路径;
+ *        - task.cancel 能精确命中续跑轮(它带的是新 requestId);
+ *        - 一次续跑再失败、再被续跑时天然形成链条, 每环都有自己的 id。
+ *
+ *      server 侧约定:
+ *        - 认不出 reopenOf(映射已过期 / 消息已删)时**静默忽略**整条帧, 并对
+ *          随后到达的同 requestId 的 turn.progress / turn.end 一并忽略 ——
+ *          回流失败只是回到"消息停在失败上"的现状, 不是错误, 不要报错刷屏;
+ *        - 认得出时把那条消息改回进行中态, 后续 progress 原地刷新、turn.end
+ *          定稿。渠道里不新增消息(用户抱怨的正是那条消息不动)。
+ *      desktop 侧约定:
+ *        - 只在 server 于 welcome.features 宣告 HOOK_FEATURE_TURN_REOPEN 时
+ *          才发本帧(旧 server 会 parse 拒收丢帧, 虽不断连但没有意义);
+ *        - 只有"用户在桌面端显式续跑"才触发 —— 桌面端在同一会话里问的其它
+ *          问题不回流, 否则渠道消息会被无关内容改写;
+ *        - 记账只在进程内(app 重启后原 requestId 已随进程消失), 有 TTL。
  */
 
 /** 当前协议版本。信封 `v` 不等于本值的消息直接拒收。 */
@@ -124,6 +160,7 @@ export const HOOK_MESSAGE_TYPES = [
   'task.ack',
   'turn.end',
   'turn.progress',
+  'turn.reopen',
   'bind.start',
   'bind.update',
   'bind.revoke',
@@ -409,6 +446,32 @@ export interface TurnProgressPayload {
   requestId: string;
   /** 当前渲染快照(完整替换语义, 非增量)。 */
   text: string;
+}
+
+// ── 阶段 18(v2): 收口后的续跑 ───────────────────────────────────────────────
+
+/**
+ * turn.reopen(desktop -> server): 把一个已收口任务的续跑接回原消息
+ * (见文件头第 18 条)。
+ *
+ * server 收到后把 reopenOf 那条消息的位置登记给 requestId, 之后 desktop 会用
+ * **requestId**(不是 reopenOf)继续发 turn.progress 与 turn.end, 走既有路径。
+ * 认不出 reopenOf 时静默忽略本帧与后续同 requestId 的帧。
+ */
+export interface TurnReopenPayload {
+  /** 续跑轮的新任务 id(后续 progress / end / cancel 都用它)。 */
+  requestId: string;
+  /** 被续跑的那一轮的 requestId —— server 据此定位渠道里那条消息。 */
+  reopenOf: string;
+  /** 渠道内标识(原样回传)。server 可用它兜底定位 thread。 */
+  externalKey: string;
+  /** 续跑发生在哪个会话(记录与调试用, 不参与路由)。 */
+  sessionId: string | null;
+  /**
+   * 为什么被续跑。当前只有 'user-continued'(用户在桌面端显式点了续跑 / 重试)。
+   * 开放集合: server 不认识的值按 'user-continued' 处理即可, 不要拒帧。
+   */
+  reason: string;
 }
 
 // ── 阶段 5(v2): 身份绑定 ────────────────────────────────────────────────────
@@ -917,6 +980,13 @@ export interface LifecyclePreferencePayload {
 }
 
 /**
+ * welcome.features 能力标识: server 支持 turn.reopen(见文件头第 18 条)——
+ * 能把一条已收口消息重新挂到续跑轮的新 requestId 上。desktop 仅在本标识出现
+ * 时才登记续跑记账并发帧; 缺席则维持旧行为(渠道消息停在失败上)。
+ */
+export const HOOK_FEATURE_TURN_REOPEN = 'turn-reopen-v1';
+
+/**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
  * workspaces 清单首位(绑定到它的任务以无项目目录的对话模式运行), 真实
  * 目录别名不许撞名(desktop 侧校验)。server 据此识别伪目录: 清单里只剩
@@ -1026,6 +1096,7 @@ export type HookTaskDispatchMessage = HookEnvelope<'task.dispatch', TaskDispatch
 export type HookTaskAckMessage = HookEnvelope<'task.ack', TaskAckPayload>;
 export type HookTurnEndMessage = HookEnvelope<'turn.end', TurnEndPayload>;
 export type HookTurnProgressMessage = HookEnvelope<'turn.progress', TurnProgressPayload>;
+export type HookTurnReopenMessage = HookEnvelope<'turn.reopen', TurnReopenPayload>;
 export type HookBindStartMessage = HookEnvelope<'bind.start', BindStartPayload>;
 export type HookBindUpdateMessage = HookEnvelope<'bind.update', BindUpdatePayload>;
 export type HookBindRevokeMessage = HookEnvelope<'bind.revoke', BindRevokePayload>;
@@ -1099,6 +1170,7 @@ export type HookMessage =
   | HookTaskAckMessage
   | HookTurnEndMessage
   | HookTurnProgressMessage
+  | HookTurnReopenMessage
   | HookBindStartMessage
   | HookBindUpdateMessage
   | HookBindRevokeMessage

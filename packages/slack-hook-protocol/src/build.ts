@@ -54,6 +54,7 @@ import {
   type HookToolResponseMessage,
   type HookTurnEndMessage,
   type HookTurnProgressMessage,
+  type HookTurnReopenMessage,
   type HookWelcomeMessage,
   type InteractionCancelPayload,
   type InteractionDecisionPayload,
@@ -80,6 +81,7 @@ import {
   type ToolResponsePayload,
   type TurnEndPayload,
   type TurnProgressPayload,
+  type TurnReopenPayload,
   type WelcomePayload,
 } from './types';
 
@@ -137,6 +139,21 @@ export function makeTurnEnd(payload: TurnEndPayload): HookTurnEndMessage {
 
 export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgressMessage {
   return envelope('turn.progress', payload);
+}
+
+/**
+ * turn.reopen: 续跑轮认领渠道里那条已收口的消息(见 types.ts 文件头第 18 条)。
+ * reason 给出显式默认 —— 当前只有"用户在桌面端续跑"这一种触发。
+ */
+export function makeTurnReopen(
+  input: Pick<TurnReopenPayload, 'requestId' | 'reopenOf' | 'externalKey'> &
+    Partial<Pick<TurnReopenPayload, 'sessionId' | 'reason'>>,
+): HookTurnReopenMessage {
+  return envelope('turn.reopen', {
+    sessionId: null,
+    reason: 'user-continued',
+    ...input,
+  });
 }
 
 export function makeBindStart(payload: BindStartPayload): HookBindStartMessage {

@@ -287,6 +287,23 @@ function validateTurnProgress(p: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * turn.reopen: requestId 与 reopenOf 必须都在且**不相等** —— 复用同一个 id 会让
+ * server 侧把新一轮登记成它自己的前身, 幂等表状态不可推理(见 types.ts 第 18 条:
+ * 续跑刻意换新 id)。reason 是开放集合, 只校验非空串, 未知值由消费方兜底。
+ */
+function validateTurnReopen(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) return 'turn.reopen.requestId must be a non-empty string';
+  if (!isNonEmptyString(p.reopenOf)) return 'turn.reopen.reopenOf must be a non-empty string';
+  if (p.requestId === p.reopenOf) return 'turn.reopen.requestId must differ from reopenOf';
+  if (!isNonEmptyString(p.externalKey)) {
+    return 'turn.reopen.externalKey must be a non-empty string';
+  }
+  if (!isNullableString(p.sessionId)) return 'turn.reopen.sessionId must be a string or null';
+  if (!isNonEmptyString(p.reason)) return 'turn.reopen.reason must be a non-empty string';
+  return null;
+}
+
 // ── v2 增量帧校验 ────────────────────────────────────────────────────────────
 
 /**
@@ -920,6 +937,7 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'task.ack': validateAck,
   'turn.end': validateTurnEnd,
   'turn.progress': validateTurnProgress,
+  'turn.reopen': validateTurnReopen,
   'bind.start': validateBindStart,
   'bind.update': validateBindUpdate,
   'bind.revoke': validateBindRevoke,
