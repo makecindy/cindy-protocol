@@ -26,7 +26,7 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 14. **多 provider**:`provider.bind.*` / `provider.prefs.*` —— 在不改变 Slack 旧帧的前提下追加统一的 provider 绑定与偏好通道
 15. **最近会话**:`query.kind=sessions` —— Telegram `/session` 仅拉取最多 20 条脱敏会话摘要
 16. **群消息中继(group-relay)**:`group.message` —— server 把群消息实时转发给该群已知绑定成员的桌面(fire-and-forget),滚动窗口与上下文拼装全部在 desktop 本地;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_GROUP_RELAY='group-relay-v1'`)
-17. **上下线通知偏好**:`hello.lifecycleAnnouncement` 上报当前值,`lifecycle.preference` 实时更新;server 通过 `lifecycle-announcement-v1` feature 宣告支持
+17. **上下线通知偏好**:`hello.lifecycleAnnouncement` 在握手时上报当前值,`lifecycle.preference`(desktop → server,`{ enabled: boolean }`)实时更新;desktop 仅在 `welcome.features` 包含 `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT='lifecycle-announcement-v1'` 时发送实时更新帧
 
 ## 2. 核心设计原则
 
@@ -57,6 +57,10 @@ interface HookEnvelope<TType, TPayload> {
 - `v` 固定为 1,靠以下两条实现无版本号演进:
   - **type 是开放集合**:老端收到未知 `type` **丢帧不断连**。新消息类型天然向后兼容(功能降级但不致故障)。
   - **字段级宽容**:校验器只查已知字段,未知字段静默忽略(如 `turn.end.attachments` 对旧 server);新增可选字段的缺省行为必须定义(如 `bind.update.installUrl` 缺省回退通用链接)。
+- 生命周期通知偏好采用显式滚动升级语义:
+  - **新 desktop → 旧 server**:旧 server 忽略 `hello.lifecycleAnnouncement`;因 `welcome.features` 不含 `lifecycle-announcement-v1`,desktop 不发送 `lifecycle.preference`,server 保持既有“通知开启”行为。
+  - **旧 desktop → 新 server**:缺省 `hello.lifecycleAnnouncement` 按 `true` 处理,保持升级前通知行为。
+  - **新 desktop → 新 server**:server 先采用 hello 中的握手值;声明 `lifecycle-announcement-v1` 后,desktop 才可用 `lifecycle.preference` 即时覆盖当前设备偏好。
 - 本次只追加新消息类型、能力字符串和 `query.kind=sessions`;既有 `bind.*` / `prefs.*` 类型、字段与构造结果保持不变。老端会丢弃未知 provider 帧,新端在能力缺席时不会发送它们。
 - 帧上限 `HOOK_MAX_FRAME_CHARS = 48 MiB`(JSON 序列化后字符数)。纯防 OOM 的粗防御,取"能容纳几张聊天截图的 base64"的宽上限;附件精细限额由生产源头(provider)负责。
 
@@ -73,8 +77,8 @@ interface HookEnvelope<TType, TPayload> {
 
 | 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                          |
 | --------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello`         | desktop → server | 建连后第一帧。`protocolVersion`、`deviceId`、`deviceName`、`workspaces`(注册的别名列表;首位恒为内置对话伪目录 `HOOK_CHAT_WORKSPACE_ALIAS='chat'`)、`agents`(可用 agent 类型)、可选 `features`(desktop 侧能力标识,如 `HOOK_FEATURE_MULTI_TEAM`)。别名映射变更后重发 hello 即时生效(server 以最新一帧为准) |
-| `welcome`       | server → desktop | 握手完成。`serverName`、`features`(server 侧能力标识:`HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM`;空数组 = 均不支持)                                                                                                                                                                           |
+| `hello`         | desktop → server | 建连后第一帧。`protocolVersion`、`deviceId`、`deviceName`、`workspaces`(注册的别名列表;首位恒为内置对话伪目录 `HOOK_CHAT_WORKSPACE_ALIAS='chat'`)、`agents`(可用 agent 类型)、可选 `features`(desktop 侧能力标识,如 `HOOK_FEATURE_MULTI_TEAM`)、可选 `lifecycleAnnouncement`(当前设备的上下线通知偏好;缺省按 `true`)。别名映射变更后重发 hello 即时生效(server 以最新一帧为准) |
+| `welcome`       | server → desktop | 握手完成。`serverName`、`features`(server 侧能力标识,包括 `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT`;空数组 = 均不支持)                                                                                                                                                                           |
 | `ping` / `pong` | 双向             | 心跳,收到 ping 必须回 pong。payload 恒空对象                                                                                                                                                                                                                                                             |
 
 ### 阶段 2/4/7/9 任务生命周期
@@ -158,6 +162,14 @@ interface HookEnvelope<TType, TPayload> {
 `task.dispatch.source` 增加可选 `triggerMessageId`(与 `group.message.messageId` 同一 id 空间):desktop 据此在本地窗口中精确剔除"当前消息";旧 server 不发时 desktop 降级为不剔重。
 
 设计边界(2026-07-28 决策):**群聊内容不得驻留在 server**(内存亦不允许)——server 收到群消息后对已声明 `group-relay-v1` 的成员桌面转发即弃;server 侧仅可存 `chatId ↔ principal` 成员元数据(id 级,无内容)用于路由。滚动窗口、增量游标与上下文拼装全部在 desktop 本地完成。与 Slack 通道「平台即存储、按需拉取」同构;Telegram 无历史 API,存储方为用户自己的设备。一次性凭证(如绑定深链 `/start <token>`)由 server 过滤,不转发。
+
+### 上下线通知偏好
+
+| 消息                   | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                        |
+| ---------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle.preference` | desktop → server | 即时更新当前设备的 Slack Bot 上下线通知偏好。payload 恒为 `{ enabled: boolean }`;desktop 仅在 `welcome.features` 包含 `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT='lifecycle-announcement-v1'` 后发送。能力缺席时不发送,以握手兼容语义降级。 |
+
+握手初值由 `hello.lifecycleAnnouncement` 提供。新 server 对字段缺省按 `true` 处理以兼容旧 desktop;旧 server 忽略该可选字段并继续按既有开启行为运行。这样无论先升级 desktop 还是 server,都不会因单边升级意外关闭既有通知。
 
 ## 6. 典型时序
 
