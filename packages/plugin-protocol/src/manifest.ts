@@ -914,7 +914,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: 'locales 必须提供 en，作为所有不支持语言的固定回退' };
     }
     const normalized: Partial<Record<GhostLocale, string>> = {};
-    const seenPaths = new Set<string>();
+    const seenPaths: string[] = [];
     const nonLocaleFilePaths = [
       GHOST_MANIFEST_FILE,
       raw.entry,
@@ -962,10 +962,22 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与插件其他声明文件大小写折叠后冲突`,
         };
       }
-      if (seenPaths.has(normalizedLocalePath)) {
+      if (seenPaths.includes(normalizedLocalePath)) {
         return { ok: false, reason: `locales 含重复路径 ${JSON.stringify(localePath)}` };
       }
-      seenPaths.add(normalizedLocalePath);
+      if (
+        seenPaths.some(
+          (path) =>
+            isSameOrDescendant(path, normalizedLocalePath) ||
+            isSameOrDescendant(normalizedLocalePath, path),
+        )
+      ) {
+        return {
+          ok: false,
+          reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与其他 locale 文件存在祖先路径冲突`,
+        };
+      }
+      seenPaths.push(normalizedLocalePath);
       normalized[locale] = localePath;
     }
     locales = {

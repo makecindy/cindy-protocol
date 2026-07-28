@@ -87,6 +87,18 @@ describe('Ghost manifest contract', () => {
       validateGhostManifest({
         ...validManifest,
         locales: {
+          en: 'a.json',
+          ja: 'a.json/child.json',
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('祖先路径冲突'),
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        locales: {
           en: 'locales/en.json',
           fr: 'locales/fr.json',
         },
