@@ -125,18 +125,32 @@
  *        - task.cancel 能精确命中续跑轮(它带的是新 requestId);
  *        - 一次续跑再失败、再被续跑时天然形成链条, 每环都有自己的 id。
  *
+ *      路由面**只含** turn.progress / turn.end / task.cancel, 刻意不含
+ *      interaction.*: 续跑是用户在桌面端点出来的, 人就在桌面前, 那一轮里 agent
+ *      的提问 / 计划审阅 / 权限审批由桌面本地交互面直接处理, 不绕回渠道。
+ *
  *      server 侧约定:
  *        - 认不出 reopenOf(映射已过期 / 消息已删)时**静默忽略**整条帧, 并对
  *          随后到达的同 requestId 的 turn.progress / turn.end 一并忽略 ——
  *          回流失败只是回到"消息停在失败上"的现状, 不是错误, 不要报错刷屏;
+ *          更一般地: 对**从未登记过**的 requestId 的 turn.progress / turn.end
+ *          一律静默忽略, 不报错也不新建消息;
  *        - 认得出时把那条消息改回进行中态, 后续 progress 原地刷新、turn.end
- *          定稿。渠道里不新增消息(用户抱怨的正是那条消息不动)。
+ *          定稿。渠道里不新增消息(用户抱怨的正是那条消息不动);
+ *        - 本帧必须幂等: 同一 (requestId, reopenOf) 重复登记同一个位置, 无副作用
+ *          (断线重投时 desktop 可能重复发送);
+ *        - 不需要为续跑 requestId 关联 interaction.* —— 那些帧不会带着它到来。
  *      desktop 侧约定:
  *        - 只在 server 于 welcome.features 宣告 HOOK_FEATURE_TURN_REOPEN 时
  *          才发本帧(旧 server 会 parse 拒收丢帧, 虽不断连但没有意义);
  *        - 只有"用户在桌面端显式续跑"才触发 —— 桌面端在同一会话里问的其它
  *          问题不回流, 否则渠道消息会被无关内容改写;
  *        - 记账只在进程内(app 重启后原 requestId 已随进程消失), 有 TTL。
+ *
+ *      已声明接受的降级: 本帧发出后、server 装上映射前连接断开时, 映射不存在而
+ *      后续帧被忽略, 这一轮续跑的结果不回流 —— 退回"消息停在失败上"的现状(与本
+ *      能力上线前一致), 用户可在渠道重发。刻意不为此加 ack 往返: 回流是增强而非
+ *      关键路径, 失败方向安全。
  */
 
 /** 当前协议版本。信封 `v` 不等于本值的消息直接拒收。 */
@@ -457,13 +471,34 @@ export interface TurnProgressPayload {
  * server 收到后把 reopenOf 那条消息的位置登记给 requestId, 之后 desktop 会用
  * **requestId**(不是 reopenOf)继续发 turn.progress 与 turn.end, 走既有路径。
  * 认不出 reopenOf 时静默忽略本帧与后续同 requestId 的帧。
+ *
+ * 路由面**只含** turn.progress / turn.end / task.cancel。刻意不含 interaction.*:
+ * 续跑是用户在**桌面端**点出来的, 人就在桌面前, 那一轮里 agent 的提问 / 计划审阅 /
+ * 权限审批由桌面本地交互面直接处理, 不绕回渠道 —— 所以 server 不会收到带续跑
+ * requestId 的 interaction.request, 也不需要为它建立 thread 关联。(反过来若把交互
+ * 推回渠道, 用户得离开正在操作的桌面端去渠道点按钮, 更绕。)
+ *
+ * 可靠性: 本帧可被重复发送, server 必须幂等 —— 同一 (requestId, reopenOf) 重复
+ * 登记同一个位置, 无副作用。与之对称, server 对**从未登记过**的 requestId 的
+ * turn.progress / turn.end 一律静默忽略: 不报错、不新建消息。
+ *
+ * 已声明接受的降级: 本帧在发出后、server 装上映射前连接断开时, 映射不存在而
+ * 后续帧被忽略, 这一轮续跑的结果就不回流了 —— 退回"渠道消息停在失败上"的现状
+ * (与本能力上线前完全一致), 用户可在渠道重发一条消息。协议刻意不为此加 ack 往返:
+ * 回流是增强而非关键路径, 失败方向安全。
  */
 export interface TurnReopenPayload {
   /** 续跑轮的新任务 id(后续 progress / end / cancel 都用它)。 */
   requestId: string;
   /** 被续跑的那一轮的 requestId —— server 据此定位渠道里那条消息。 */
   reopenOf: string;
-  /** 渠道内标识(原样回传)。server 可用它兜底定位 thread。 */
+  /**
+   * 渠道内标识(原样回传), 供日志与诊断关联。
+   *
+   * **不参与路由**: 定位那条消息的唯一依据是 reopenOf。刻意不允许用它兜底 ——
+   * 两端独立实现(server 闭源、独立仓), 一端"映射过期就按 externalKey 找 thread"、
+   * 另一端"映射过期就忽略", 同一次过期续跑会在一端改写消息、在另一端丢弃。
+   */
   externalKey: string;
   /** 续跑发生在哪个会话(记录与调试用, 不参与路由)。 */
   sessionId: string | null;
