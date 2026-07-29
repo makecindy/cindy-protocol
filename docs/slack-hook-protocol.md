@@ -1,7 +1,7 @@
 # slack-hook-protocol — hook server ↔ desktop 双工任务协议
 
 > 包:`@cindy/slack-hook-protocol` · 协议版本 `HOOK_PROTOCOL_VERSION = 1` · 传输:WebSocket 文本帧(JSON)
-> 两端:**desktop**(客户端,发起连接)与 **hook server**(外部渠道接入服务,当前渠道为 Slack 与协商启用的 Telegram)。包名本版保留以避免消费方迁移风险。
+> 两端:**desktop**(客户端,发起连接)与 **hook server**(外部渠道接入服务,当前渠道为 Slack 与协商启用的 Telegram、X (Twitter))。包名本版保留以避免消费方迁移风险。
 
 ## 1. 协议模型(四幕 + v2 增量)
 
@@ -35,7 +35,7 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 - **决策语义留在 desktop**:交互卡(阶段 10)中 server 是"哑渲染器"——渲染卡片、回传 `buttonId`,按钮到决策的映射、超时与安全默认全部由 desktop 持有。
 - **确定性靠代码不靠对端自觉**:两端收帧唯一入口是 `parseHookMessage`,手写校验、零依赖、坏帧返回 `ok:false` + 字段路径,绝不抛异常。
 - **sessionId 仅接管时指定**:普通流程 `task.dispatch.sessionId` 恒 null(按 externalKey 定位);非 null 表示接管已有桌面会话。ack / turn.end 中回传仅作记录,不参与路由。
-- **provider 能力必须双向协商**:只有 hello 与 welcome 同时包含 `provider-bind-v1` / `provider-prefs-v1` / `session-picker-v1` 时才可使用对应新增帧;Telegram 还要求 server 的 welcome 包含 `provider:telegram`。任一能力缺席都隐藏 Telegram 并完整回落现有 Slack 路径。
+- **provider 能力必须双向协商**:只有 hello 与 welcome 同时包含 `provider-bind-v1` / `provider-prefs-v1` / `session-picker-v1` 时才可使用对应新增帧;每个 provider-neutral 渠道还要求 server 的 welcome 包含对应的 `provider:<id>` 标识(Telegram = `provider:telegram`,X = `provider:x`)。任一能力缺席都隐藏该渠道并完整回落现有 Slack 路径。
 - **provider 偏好隔离**:`provider.prefs.*` 用 `provider + bindingId/scopeId + workspace` 定位,不会读取或覆写旧 `prefs.*` 的 Slack 行。provider-neutral 条目刻意不含 `teamId`。
 
 ## 3. 信封与兼容策略
