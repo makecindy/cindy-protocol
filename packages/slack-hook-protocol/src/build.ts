@@ -144,15 +144,21 @@ export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgress
 /**
  * turn.reopen: 续跑轮认领渠道里那条已收口的消息(见 types.ts 文件头第 18 条)。
  * reason 给出显式默认 —— 当前只有"用户在桌面端续跑"这一种触发。
+ *
+ * 默认值在 spread **之后**兜: `Partial` 允许调用方把可选值显式写成 undefined
+ * (如 `sessionId: maybeId` 而 maybeId 为 undefined), 那样 `...input` 会把默认值
+ * 覆盖成 undefined、JSON 序列化再把这个键整个删掉, 收帧端按"必填字段缺失"拒收
+ * 整帧 —— 续跑结果就再也回不到渠道那条消息上。两个字段都不接受 undefined 语义,
+ * 用 `??` 收敛掉。
  */
 export function makeTurnReopen(
   input: Pick<TurnReopenPayload, 'requestId' | 'reopenOf' | 'externalKey'> &
     Partial<Pick<TurnReopenPayload, 'sessionId' | 'reason'>>,
 ): HookTurnReopenMessage {
   return envelope('turn.reopen', {
-    sessionId: null,
-    reason: 'user-continued',
     ...input,
+    sessionId: input.sessionId ?? null,
+    reason: input.reason ?? 'user-continued',
   });
 }
 

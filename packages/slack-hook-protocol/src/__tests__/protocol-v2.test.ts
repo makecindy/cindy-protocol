@@ -403,6 +403,22 @@ describe('turn.reopen(阶段 14: 收口后的续跑)', () => {
     );
   });
 
+  it('显式传 undefined 的可选值不得覆盖默认(否则序列化丢键 -> 收帧端拒收整帧)', () => {
+    // 调用方常写 `sessionId: maybeId`, 而 maybeId 可能是 undefined。若默认值被它
+    // 覆盖, JSON 序列化会把这个键整个删掉, 对端按"必填字段缺失"拒收 —— 续跑结果
+    // 就再也回不到渠道那条消息上。
+    const msg = makeTurnReopen({
+      requestId: 'r2',
+      reopenOf: 'r1',
+      externalKey: 'k',
+      sessionId: undefined,
+      reason: undefined,
+    });
+    expect(msg.payload.sessionId).toBeNull();
+    expect(msg.payload.reason).toBe('user-continued');
+    roundTrip(msg);
+  });
+
   it('requestId 不得与 reopenOf 相同(换新 id 是本帧的前提)', () => {
     // 复用同一个 id 会让 server 把续跑轮登记成它自己的前身, 幂等表状态不可推理。
     const msg = makeTurnReopen({ requestId: 'r2', reopenOf: 'r1', externalKey: 'k' });
