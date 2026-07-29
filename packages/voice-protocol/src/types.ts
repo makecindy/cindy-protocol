@@ -11,6 +11,13 @@ export const VOICE_PROTOCOL_VERSION = 1 as const;
 /** Stable Cindy-owned API paths. */
 export const VOICE_SESSION_PATH = '/api/voice/sessions' as const;
 export const VOICE_ASR_PATH = '/api/voice/asr' as const;
+/**
+ * Session-less dictionary-learning endpoint, authenticated by the account
+ * token alone. Dictionary learning is triggered by the user editing inserted
+ * text *after* dictation finished, when the ASR session (and its one-shot
+ * ticket) is already gone — so it cannot reuse the session-scoped refine path.
+ */
+export const VOICE_DICTIONARY_LEARNING_PATH = '/api/voice/dictionary-learning' as const;
 
 /**
  * Max raw length (chars) accepted by `parseVoiceRefinerUserPayloadJson` before
@@ -37,6 +44,22 @@ export const VOICE_REFINER_SCHEMA_NAMES = [
 ] as const;
 export type VoiceRefinerSchemaName = (typeof VOICE_REFINER_SCHEMA_NAMES)[number];
 
+/**
+ * Who owns the refiner system prompt for this session.
+ *
+ * - `client`: the client sends its own bundled prompt as `messages[0]`. This is
+ *   the historical behaviour and stays the default when the field is absent, so
+ *   a client talking to a server that predates this field keeps working.
+ * - `server`: the client omits the system message entirely and voice-server
+ *   injects its own prompt (selected by `schemaName`). Lets the managed prompt
+ *   be iterated without shipping a client release.
+ *
+ * Only meaningful for managed refinement: a BYOK client dials the upstream
+ * directly and must always carry its own prompt.
+ */
+export const VOICE_PROMPT_OWNERS = ['client', 'server'] as const;
+export type VoicePromptOwner = (typeof VOICE_PROMPT_OWNERS)[number];
+
 /** Authenticated control-plane request that allocates one ASR session. */
 export interface CreateVoiceSessionRequest {
   protocolVersion?: typeof VOICE_PROTOCOL_VERSION;
@@ -59,7 +82,8 @@ export interface VoiceAsrTarget {
 }
 
 export type VoiceRefinerTarget =
-  { enabled: false; provider?: never } | { enabled: true; provider: string };
+  | { enabled: false; provider?: never; promptOwner?: never }
+  | { enabled: true; provider: string; promptOwner?: VoicePromptOwner };
 
 /** Successful `POST /api/voice/sessions` response. */
 export interface CreateVoiceSessionResponse {
@@ -83,7 +107,12 @@ export interface VoiceRefinementContext {
 }
 
 export interface VoiceDictationRefinementInput {
-  promptVersion: string;
+  /**
+   * Version tag of the *client-owned* prompt this payload was built for; part
+   * of the prompt-cache key. Absent under `promptOwner: 'server'`, where the
+   * server owns both the prompt and its version.
+   */
+  promptVersion?: string;
   context: VoiceRefinementContext;
   dictationText: string;
   replyToMessage?: string;
@@ -119,7 +148,8 @@ export interface VoiceDictionaryLearningContext {
 }
 
 export interface VoiceDictionaryLearningInput {
-  promptVersion: string;
+  /** See {@link VoiceDictationRefinementInput.promptVersion}. */
+  promptVersion?: string;
   debug?: boolean;
   source?: 'in_app' | 'external_overlay';
   rawTranscriptText?: string;
@@ -135,9 +165,50 @@ export type VoiceRefinerUserPayload =
   | { schemaName: 'dictation_refinement'; input: VoiceDictationRefinementInput }
   | { schemaName: 'dictation_dictionary_learning'; input: VoiceDictionaryLearningInput };
 
+export interface VoiceRefineSystemMessage {
+  role: 'system';
+  content: string;
+}
+
+export interface VoiceRefineUserMessage {
+  role: 'user';
+  content: string;
+}
+
 export interface VoiceRefineRequest {
+  /**
+   * Routes warmup and the real request to the same upstream cache shard. Under
+   * `promptOwner: 'server'` the client cannot derive it (it never sees the
+   * prompt), so it omits the field and the server generates its own.
+   */
   prompt_cache_key?: string;
-  messages: [{ role: 'system'; content: string }, { role: 'user'; content: string }];
+  /**
+   * `[system, user]` under client-owned prompts; `[user]` alone under
+   * server-owned prompts, where voice-server supplies the system message.
+   */
+  messages: [VoiceRefineSystemMessage, VoiceRefineUserMessage] | [VoiceRefineUserMessage];
+}
+
+/**
+ * Which endpoint a refine-shaped request arrived on. The envelope alone cannot
+ * express this, but the two routes have different contracts, so the parser
+ * needs it to reject cross-route payloads:
+ *
+ * - `refine` (`/api/voice/sessions/:id/refine`): both prompt owners are legal
+ *   and both schemas are accepted.
+ * - `dictionary_learning` (`/api/voice/dictionary-learning`): server-owned only,
+ *   and the payload must be `dictation_dictionary_learning`. Without this the
+ *   session-less route would accept a caller-supplied system prompt.
+ */
+export const VOICE_REFINE_ROUTES = ['refine', 'dictionary_learning'] as const;
+export type VoiceRefineRoute = (typeof VOICE_REFINE_ROUTES)[number];
+
+/** Cross-validated envelope + payload, with the prompt owner it implies. */
+export interface VoiceRefineRequestWithPayload {
+  request: VoiceRefineRequest;
+  payload: VoiceRefinerUserPayload;
+  /** Derived from the envelope: a system message means the client owns it. */
+  promptOwner: VoicePromptOwner;
 }
 
 /** Shared HTTP error envelope used by voice-server. */

@@ -14,6 +14,8 @@ export {
   parseCreateVoiceSessionResponse,
   parseVoiceErrorResponse,
   parseVoiceRefineRequest,
+  parseVoiceRefineRequestWithPayload,
   parseVoiceRefinerUserPayload,
   parseVoiceRefinerUserPayloadJson,
+  type VoiceRefinerUserPayloadOptions,
 } from './parse';
