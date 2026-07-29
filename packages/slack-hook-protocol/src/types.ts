@@ -482,13 +482,29 @@ export interface TurnProgressPayload {
  * 登记同一个位置, 无副作用。与之对称, server 对**从未登记过**的 requestId 的
  * turn.progress / turn.end 一律静默忽略: 不报错、不新建消息。
  *
+ * 帧序: 本帧必须排在这一轮的**任何** turn.progress / turn.end 之前 —— 包括"首个
+ * 观察到的事件本身就是终态"(例如立刻的凭证错误)。先发 turn.end 的话 server 会按
+ * 未知 requestId 丢弃它, 随后的 reopen 又把消息改成进行中, 就再没有终态帧能收口。
+ *
+ * 孤儿收口(server 侧责任): 映射装上、消息已改成进行中之后, desktop 崩溃 / 重启
+ * 不会补发任何帧(记账只在进程内)。所以**连接断开时 server 必须收口该连接上所有
+ * "已 reopen 但未收到 turn.end"的消息** —— 恢复原终态或改写成一句"续跑中断"。
+ * 少了这条, 可见状态会从"停在失败"退化成"永远进行中", 比不做回流更糟。
+ *
  * 已声明接受的降级: 本帧在发出后、server 装上映射前连接断开时, 映射不存在而
  * 后续帧被忽略, 这一轮续跑的结果就不回流了 —— 退回"渠道消息停在失败上"的现状
  * (与本能力上线前完全一致), 用户可在渠道重发一条消息。协议刻意不为此加 ack 往返:
- * 回流是增强而非关键路径, 失败方向安全。
+ * 回流是增强而非关键路径。注意这个"失败方向安全"的结论**依赖上面那条孤儿收口**。
  */
 export interface TurnReopenPayload {
-  /** 续跑轮的新任务 id(后续 progress / end / cancel 都用它)。 */
+  /**
+   * 续跑轮的新任务 id(后续 progress / end / cancel 都用它)。
+   *
+   * 必须**全局抗碰撞**(UUID v4 或同等强度), 不得用递增计数器或会话内序号: 普通
+   * 任务的 requestId 由 server 生成、本字段由 desktop 生成, 两者是同一张生命周期
+   * 路由表的键, 而 parse 只能校验"非空且不等于 reopenOf"。id 空间重叠时, 一次续跑
+   * 可能覆盖掉某个无关在跑任务的路由。server 侧以"拒绝已绑定的 requestId"兜底。
+   */
   requestId: string;
   /** 被续跑的那一轮的 requestId —— server 据此定位渠道里那条消息。 */
   reopenOf: string;
