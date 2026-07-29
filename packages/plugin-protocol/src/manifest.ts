@@ -7,6 +7,16 @@ export const CINDY_FILE_EXT = '.cindy';
 /** ghost.json 格式版本；与 Plugin HTTP API envelope 版本独立演进。 */
 export const GHOST_MANIFEST_SCHEMA_VERSION = 2 as const;
 
+/** Cindy host locales supported by Plugin manifest resources. */
+export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
+export type GhostLocale = (typeof GHOST_LOCALES)[number];
+export type GhostManifestLocales = {
+  en: string;
+} & Partial<Record<Exclude<GhostLocale, 'en'>, string>>;
+
+/** Maximum size of one locale JSON resource in a `.cindy` package. */
+export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
+
 /**
  * 意识 id 规则:小写字母/数字开头,后续允许小写字母/数字/连字符,总长 1–32。
  * 收紧到这个集合并排除 Windows 设备保留名,因为 id 直接用作安装目录名
@@ -687,6 +697,11 @@ export interface GhostManifest {
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
+   * 宿主语言到包内 locale JSON 的映射。声明时必须提供英文资源作为固定
+   * 回退；路径须唯一，且不能与其它 manifest 文件声明冲突。
+   */
+  locales?: GhostManifestLocales;
+  /**
    * 意识自我介绍(1–300 字,仅展示用):这段意识是干嘛
    * 的、给谁用。装入确认框与详情页展示;与 tools[].description(给 AI 看的
    * 工具说明)职责不同,后者不因本字段缺省而顶上。
@@ -880,6 +895,95 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     (typeof raw.author !== 'string' || raw.author.trim().length === 0 || raw.author.length > 64)
   ) {
     return { ok: false, reason: 'author 必须是 1–64 字符的非空字符串' };
+  }
+  let locales: GhostManifest['locales'];
+  if (raw.locales !== undefined) {
+    if (!isPlainObject(raw.locales)) {
+      return { ok: false, reason: 'locales 必须是语言到 locale JSON 路径的对象' };
+    }
+    const unknownLocale = Object.keys(raw.locales).find(
+      (locale) => !(GHOST_LOCALES as readonly string[]).includes(locale),
+    );
+    if (unknownLocale) {
+      return {
+        ok: false,
+        reason: `locales 含宿主不支持的语言 ${JSON.stringify(unknownLocale)}(可用:${GHOST_LOCALES.join(' / ')})`,
+      };
+    }
+    if (raw.locales.en === undefined) {
+      return { ok: false, reason: 'locales 必须提供 en，作为所有不支持语言的固定回退' };
+    }
+    const normalized: Partial<Record<GhostLocale, string>> = {};
+    const seenPaths: string[] = [];
+    const nonLocaleFilePaths = [
+      GHOST_MANIFEST_FILE,
+      raw.entry,
+      raw.icon,
+      raw.settingsHtml,
+      isPlainObject(raw.panel) ? raw.panel.html : undefined,
+      isPlainObject(raw.node) ? raw.node.entry : undefined,
+      ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
+    ].filter((value): value is string => typeof value === 'string');
+    const nonLocaleFilePathFolds = nonLocaleFilePaths.map((value) => value.toLowerCase());
+    const skillDirFolds = (
+      isPlainObject(raw.skill) && Array.isArray(raw.skill.items)
+        ? raw.skill.items.map((item) => (isPlainObject(item) ? item.dir : undefined))
+        : []
+    )
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const isSameOrDescendant = (path: string, ancestor: string): boolean =>
+      path === ancestor || path.startsWith(`${ancestor}/`);
+    for (const locale of GHOST_LOCALES) {
+      const localePath = raw.locales[locale];
+      if (localePath === undefined) continue;
+      if (
+        typeof localePath !== 'string' ||
+        !isSafeGhostRelativePath(localePath) ||
+        !localePath.toLowerCase().endsWith('.json')
+      ) {
+        return {
+          ok: false,
+          reason: `locales.${locale} 必须是安装目录内以 .json 结尾的安全相对路径`,
+        };
+      }
+      const normalizedLocalePath = localePath.toLowerCase();
+      const conflictsWithFile = nonLocaleFilePathFolds.some(
+        (path) =>
+          isSameOrDescendant(path, normalizedLocalePath) ||
+          isSameOrDescendant(normalizedLocalePath, path),
+      );
+      const conflictsWithSkillDir = skillDirFolds.some((dir) =>
+        isSameOrDescendant(dir, normalizedLocalePath),
+      );
+      if (conflictsWithFile || conflictsWithSkillDir) {
+        return {
+          ok: false,
+          reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与插件其他声明文件大小写折叠后冲突`,
+        };
+      }
+      if (seenPaths.includes(normalizedLocalePath)) {
+        return { ok: false, reason: `locales 含重复路径 ${JSON.stringify(localePath)}` };
+      }
+      if (
+        seenPaths.some(
+          (path) =>
+            isSameOrDescendant(path, normalizedLocalePath) ||
+            isSameOrDescendant(normalizedLocalePath, path),
+        )
+      ) {
+        return {
+          ok: false,
+          reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与其他 locale 文件存在祖先路径冲突`,
+        };
+      }
+      seenPaths.push(normalizedLocalePath);
+      normalized[locale] = localePath;
+    }
+    locales = {
+      ...normalized,
+      en: normalized.en!,
+    };
   }
   if (
     raw.description !== undefined &&
@@ -2467,6 +2571,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       version: raw.version,
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
+      ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
