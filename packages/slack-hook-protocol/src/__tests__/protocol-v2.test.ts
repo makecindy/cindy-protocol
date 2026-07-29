@@ -18,6 +18,7 @@ import {
   makeTaskCancel,
   makeTaskDispatch,
   makeTurnEnd,
+  makeTurnReopen,
   parseHookMessage,
   serializeHookMessage,
   type BindUpdatePayload,
@@ -373,5 +374,76 @@ describe('v1 帧扩展行为', () => {
   it('未知消息类型仍拒收(type 开放集合只对已知类型开放)', () => {
     const msg = makeTaskCancel({ requestId: 'r1' });
     expectReject({ ...msg, type: 'task.pause' }, 'unknown message type');
+  });
+});
+
+describe('turn.reopen(阶段 14: 收口后的续跑)', () => {
+  it('round-trip; sessionId / reason 有显式默认', () => {
+    const msg = makeTurnReopen({
+      requestId: 'r2',
+      reopenOf: 'r1',
+      externalKey: 'slack:C1:1.1',
+    });
+    roundTrip(msg);
+    expect(msg.payload).toEqual({
+      requestId: 'r2',
+      reopenOf: 'r1',
+      externalKey: 'slack:C1:1.1',
+      sessionId: null,
+      reason: 'user-continued',
+    });
+    roundTrip(
+      makeTurnReopen({
+        requestId: 'r3',
+        reopenOf: 'r2',
+        externalKey: 'telegram:123:456',
+        sessionId: 'sess-1',
+        reason: 'user-continued',
+      }),
+    );
+  });
+
+  it('显式传 undefined 的可选值不得覆盖默认(否则序列化丢键 -> 收帧端拒收整帧)', () => {
+    // 调用方常写 `sessionId: maybeId`, 而 maybeId 可能是 undefined。若默认值被它
+    // 覆盖, JSON 序列化会把这个键整个删掉, 对端按"必填字段缺失"拒收 —— 续跑结果
+    // 就再也回不到渠道那条消息上。
+    const msg = makeTurnReopen({
+      requestId: 'r2',
+      reopenOf: 'r1',
+      externalKey: 'k',
+      sessionId: undefined,
+      reason: undefined,
+    });
+    expect(msg.payload.sessionId).toBeNull();
+    expect(msg.payload.reason).toBe('user-continued');
+    roundTrip(msg);
+  });
+
+  it('requestId 不得与 reopenOf 相同(换新 id 是本帧的前提)', () => {
+    // 复用同一个 id 会让 server 把续跑轮登记成它自己的前身, 幂等表状态不可推理。
+    const msg = makeTurnReopen({ requestId: 'r2', reopenOf: 'r1', externalKey: 'k' });
+    expectReject(
+      { ...msg, payload: { ...msg.payload, reopenOf: 'r2' } },
+      'requestId must differ from reopenOf',
+    );
+  });
+
+  it('必填字段缺失或空串拒收', () => {
+    const msg = makeTurnReopen({ requestId: 'r2', reopenOf: 'r1', externalKey: 'k' });
+    expectReject({ ...msg, payload: { ...msg.payload, reopenOf: '' } }, 'reopenOf must be');
+    expectReject({ ...msg, payload: { ...msg.payload, externalKey: '' } }, 'externalKey must be');
+    expectReject({ ...msg, payload: { ...msg.payload, reason: '' } }, 'reason must be');
+    expectReject({ ...msg, payload: { ...msg.payload, sessionId: 7 } }, 'sessionId must be');
+  });
+
+  it('reason 是开放集合: 未知值放行(消费方兜底), 不拒帧', () => {
+    roundTrip(
+      makeTurnReopen({
+        requestId: 'r2',
+        reopenOf: 'r1',
+        externalKey: 'k',
+        reason: 'some-future-reason',
+      }),
+    );
   });
 });

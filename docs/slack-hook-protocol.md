@@ -27,6 +27,7 @@ v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 15. **最近会话**:`query.kind=sessions` —— Telegram `/session` 仅拉取最多 20 条脱敏会话摘要
 16. **群消息中继(group-relay)**:`group.message` —— server 把群消息实时转发给该群已知绑定成员的桌面(fire-and-forget),滚动窗口与上下文拼装全部在 desktop 本地;能力协商双向(`hello.features` / `welcome.features` 的 `HOOK_FEATURE_GROUP_RELAY='group-relay-v1'`)
 17. **上下线通知偏好**:`hello.lifecycleAnnouncement` 在握手时上报当前值,`lifecycle.preference`(desktop → server,`{ enabled: boolean }`)实时更新;desktop 仅在 `welcome.features` 包含 `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT='lifecycle-announcement-v1'` 时发送实时更新帧
+18. **收口后续跑**:`turn.reopen` —— 已收口任务在桌面端被用户续跑时,把后续进展接回渠道原消息;能力协商靠 `welcome.features` 的 `HOOK_FEATURE_TURN_REOPEN`
 
 ## 2. 核心设计原则
 
@@ -75,11 +76,11 @@ interface HookEnvelope<TType, TPayload> {
 
 ### 阶段 1 连接与身份
 
-| 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                          |
-| --------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                                                                                                |
+| --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `hello`         | desktop → server | 建连后第一帧。`protocolVersion`、`deviceId`、`deviceName`、`workspaces`(注册的别名列表;首位恒为内置对话伪目录 `HOOK_CHAT_WORKSPACE_ALIAS='chat'`)、`agents`(可用 agent 类型)、可选 `features`(desktop 侧能力标识,如 `HOOK_FEATURE_MULTI_TEAM`)、可选 `lifecycleAnnouncement`(当前设备的上下线通知偏好;缺省按 `true`)。别名映射变更后重发 hello 即时生效(server 以最新一帧为准) |
-| `welcome`       | server → desktop | 握手完成。`serverName`、`features`(server 侧能力标识,包括 `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT`;空数组 = 均不支持)                                                                                                                                                                           |
-| `ping` / `pong` | 双向             | 心跳,收到 ping 必须回 pong。payload 恒空对象                                                                                                                                                                                                                                                             |
+| `welcome`       | server → desktop | 握手完成。`serverName`、`features`(server 侧能力标识,包括 `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT` / `HOOK_FEATURE_TURN_REOPEN`;空数组 = 均不支持)                                                                                                                                                                       |
+| `ping` / `pong` | 双向             | 心跳,收到 ping 必须回 pong。payload 恒空对象                                                                                                                                                                                                                                                                                                                                   |
 
 ### 阶段 2/4/7/9 任务生命周期
 
@@ -90,6 +91,7 @@ interface HookEnvelope<TType, TPayload> {
 | `turn.progress` | desktop → server | 执行中渲染快照(完整 markdown,整帧替换)。desktop 负责节流(约 1.5s/帧)与长度控制                                                                                                                                                                                                                                |
 | `task.cancel`   | server → desktop | 中断在跑任务(`/stop`)。desktop 中断对应 turn,以 `turn.end(cancelled)` 收口                                                                                                                                                                                                                                    |
 | `turn.end`      | desktop → server | 任务收口。`status`:`ok / error / cancelled`(联动:ok 时 errorMessage 必须 null,error 时必须非空);`finalText`;`usage.durationMs`(拿不到就 null,不编造);`attachments`(agent 产出的图片/文件,出站与入站对称复用 TaskAttachment)                                                                                   |
+| `turn.reopen`   | desktop → server | (阶段 18)已收口任务在桌面端被用户续跑,把后续进展接回渠道那条消息。`requestId`(续跑轮的**新** id)、`reopenOf`(被续跑那轮的 id,parse 强制两者不相等)、`externalKey`、`sessionId`、`reason`(开放集合,当前只有 `user-continued`)。详见阶段 18                                                                     |
 
 ### 阶段 5 绑定(Sign in with Slack OIDC)
 
@@ -165,11 +167,41 @@ interface HookEnvelope<TType, TPayload> {
 
 ### 上下线通知偏好
 
-| 消息                   | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                        |
-| ---------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 消息                   | 方向             | 用途 / 关键字段                                                                                                                                                                                                                       |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lifecycle.preference` | desktop → server | 即时更新当前设备的 Slack Bot 上下线通知偏好。payload 恒为 `{ enabled: boolean }`;desktop 仅在 `welcome.features` 包含 `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT='lifecycle-announcement-v1'` 后发送。能力缺席时不发送,以握手兼容语义降级。 |
 
 握手初值由 `hello.lifecycleAnnouncement` 提供。新 server 对字段缺省按 `true` 处理以兼容旧 desktop;旧 server 忽略该可选字段并继续按既有开启行为运行。这样无论先升级 desktop 还是 server,都不会因单边升级意外关闭既有通知。
+
+### 阶段 18 收口后的续跑(turn.reopen)
+
+**要解决的问题**:`turn.end(status=error)` 之后,用户常在桌面端点错误横幅上的「重试」。那会在**同一个会话**里起一个新 turn(桌面端发的是一条隐藏续跑指令),任务确实继续跑了,但渠道那条消息永远停在失败上 —— `turn.progress` / `turn.end` 都以 `requestId` 为键,那一轮已经收口,协议里也没有任何"会话级"通道能让 desktop 主动往那条消息写东西。用户看到的就是「点了重试也没反应」。
+
+**为什么用新 `requestId` + `reopenOf`,而不是复用原 id**:
+
+- server 侧幂等语义不用改(原 `requestId` 的 `turn.end` 仍是一次性的,断线补发去重不受影响),只需把 `reopenOf` 指向的那条消息的位置登记给新 `requestId`,之后的 `turn.progress` / `turn.end` 走既有代码路径;
+- `task.cancel` 能精确命中续跑轮(它带的是新 `requestId`);
+- 一次续跑再失败、再被续跑时天然形成链条,每环都有自己的 id。
+
+**路由面**:续跑 `requestId` 只承载 `turn.progress` / `turn.end` / `task.cancel`,**刻意不含 `interaction.*`**。续跑是用户在桌面端点出来的,人就在桌面前,那一轮里 agent 的提问 / 计划审阅 / 权限审批由桌面本地交互面直接处理,不绕回渠道;所以 server 不会收到带续跑 `requestId` 的 `interaction.request`,也不需要为它建立 thread 关联。反过来若把交互推回渠道,用户还得离开正在操作的桌面端去渠道点按钮,更绕。
+
+`externalKey` 仅供日志与诊断关联,**不参与路由**:定位那条消息的唯一依据是 `reopenOf`。刻意不允许用 `externalKey` 兜底 —— 两端独立实现(server 闭源、独立仓),一端"映射过期就按 externalKey 找 thread"、另一端"映射过期就忽略",同一次过期续跑会在一端改写消息、在另一端丢弃。
+
+**server 侧约定**:
+
+- 认不出 `reopenOf`(映射已过期 / 消息已删)时**静默忽略**整条帧,并对随后到达的同 `requestId` 的 `turn.progress` / `turn.end` 一并忽略 —— 回流失败只是回到"消息停在失败上"的现状,不是错误,不要报错刷屏。更一般地:对**从未登记过**的 `requestId` 的 `turn.progress` / `turn.end` 一律静默忽略,不报错也不新建消息;
+- 认得出时把那条消息改回进行中态,后续 progress 原地刷新、`turn.end` 定稿。渠道里**不新增消息**(用户抱怨的正是那条消息不动);
+- 本帧必须**幂等**:同一 `(requestId, reopenOf)` 重复登记同一个位置,无副作用(断线重投时 desktop 可能重复发送);
+- 不需要为续跑 `requestId` 关联 `interaction.*` —— 那些帧不会带着它到来。
+
+**desktop 侧约定**:
+
+- 只在 server 于 `welcome.features` 宣告 `HOOK_FEATURE_TURN_REOPEN`(`turn-reopen-v1`)时才发本帧;缺席则维持旧行为;
+- 只有"用户在桌面端显式续跑"才触发 —— 桌面端在同一会话里问的其它问题不回流,否则渠道消息会被无关内容改写;
+- 记账只在进程内(app 重启后原 `requestId` 已随进程消失),有 TTL;
+- 只在**首个事件到达后**才发本帧:桌面端的续跑发送可能根本没被接受(排队被挡 / 凭证切换),先认领再发现没动静会让渠道消息停在假的"进行中"。
+
+**已声明接受的降级**:本帧发出后、server 装上映射前连接断开时,映射不存在而后续帧被忽略,这一轮续跑的结果不回流 —— 退回"消息停在失败上"的现状(与本能力上线前一致),用户可在渠道重发。协议刻意不为此加 ack 往返:回流是增强而非关键路径,失败方向安全。
 
 ## 6. 典型时序
 
@@ -199,13 +231,13 @@ sequenceDiagram
 
 ## 8. 包 API
 
-| 导出                            | 说明                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parseHookMessage(raw)`         | 两端收帧唯一入口。接受 WS 文本帧或已 parse 的对象;返回 `{ok:true, message}` 或 `{ok:false, error}`(带字段路径),不抛异常                                                                                                                                                                                                                                                                                     |
-| `isHookMessageType(v)`          | type 集合守卫                                                                                                                                                                                                                                                                                                                                                                                               |
-| `make*()`                       | 每种消息的构造器(自动填 `v` / `id` / `ts`)                                                                                                                                                                                                                                                                                                                                                                  |
-| `serializeHookMessage(message)` | 序列化为 WS 文本帧                                                                                                                                                                                                                                                                                                                                                                                          |
-| 常量                            | `HOOK_PROTOCOL_VERSION` / `HOOK_MAX_FRAME_CHARS` / `HOOK_MESSAGE_TYPES` / `HOOK_PROVIDERS` / `PROVIDER_BIND_STATES` / `HOOK_FEATURE_PROVIDER_*` / `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_CHAT_WORKSPACE_ALIAS` / `TASK_ACK_RESULTS` / `TASK_REJECT_REASONS` / `TURN_END_STATUSES` / `BIND_UPDATE_STATES` / `QUERY_KINDS` / `MAX_INTERACTION_BUTTONS` / `SUPPORTED_IMAGE_MIME_TYPES` |
+| 导出                            | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parseHookMessage(raw)`         | 两端收帧唯一入口。接受 WS 文本帧或已 parse 的对象;返回 `{ok:true, message}` 或 `{ok:false, error}`(带字段路径),不抛异常                                                                                                                                                                                                                                                                                                                  |
+| `isHookMessageType(v)`          | type 集合守卫                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `make*()`                       | 每种消息的构造器(自动填 `v` / `id` / `ts`)                                                                                                                                                                                                                                                                                                                                                                                               |
+| `serializeHookMessage(message)` | 序列化为 WS 文本帧                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 常量                            | `HOOK_PROTOCOL_VERSION` / `HOOK_MAX_FRAME_CHARS` / `HOOK_MESSAGE_TYPES` / `HOOK_PROVIDERS` / `PROVIDER_BIND_STATES` / `HOOK_FEATURE_PROVIDER_*` / `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_FEATURE_TURN_REOPEN` / `HOOK_CHAT_WORKSPACE_ALIAS` / `TASK_ACK_RESULTS` / `TASK_REJECT_REASONS` / `TURN_END_STATUSES` / `BIND_UPDATE_STATES` / `QUERY_KINDS` / `MAX_INTERACTION_BUTTONS` / `SUPPORTED_IMAGE_MIME_TYPES` |
 
 注:`build.ts` 使用 `node:crypto`,本包面向 Node 环境(desktop main 进程 / hook server),**不承诺 React Native 兼容**。
 
