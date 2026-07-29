@@ -103,12 +103,22 @@ function validateHello(p: Record<string, unknown>): string | null {
   if (p.features !== undefined && !isStringArray(p.features)) {
     return 'hello.features must be an array of non-empty strings when present';
   }
+  if (p.lifecycleAnnouncement !== undefined && typeof p.lifecycleAnnouncement !== 'boolean') {
+    return 'hello.lifecycleAnnouncement must be a boolean when present';
+  }
   return null;
 }
 
 function validateWelcome(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.serverName)) return 'welcome.serverName must be a non-empty string';
   if (!isStringArray(p.features)) return 'welcome.features must be an array of non-empty strings';
+  return null;
+}
+
+function validateLifecyclePreference(p: Record<string, unknown>): string | null {
+  if (typeof p.enabled !== 'boolean') {
+    return 'lifecycle.preference.enabled must be a boolean';
+  }
   return null;
 }
 
@@ -935,6 +945,7 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'tool.request': validateToolRequest,
   'tool.response': validateToolResponse,
   'group.message': validateGroupMessage,
+  'lifecycle.preference': validateLifecyclePreference,
 };
 
 /**

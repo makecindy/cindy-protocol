@@ -96,6 +96,11 @@
  *          绑定(多绑定时 server 拒绝猜测, 结构化报错)。
  *        - TaskSource 加 teamId / teamName: desktop 侧会话记住来源
  *          workspace(标题展示 + 工具调用默认 team)。
+ *
+ *   15. 生命周期通知偏好: hello.lifecycleAnnouncement 在每次建连时同步
+ *      当前有效值,lifecycle.preference 在设置页切换时即时更新。server
+ *      只有声明 HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT 后 desktop 才发送
+ *      即时更新帧;旧 server 忽略 hello 新字段,保持既有通知行为。
  */
 
 /** 当前协议版本。信封 `v` 不等于本值的消息直接拒收。 */
@@ -144,6 +149,7 @@ export const HOOK_MESSAGE_TYPES = [
   'tool.response',
   'bind.state',
   'group.message',
+  'lifecycle.preference',
 ] as const;
 
 export type HookMessageType = (typeof HOOK_MESSAGE_TYPES)[number];
@@ -182,6 +188,11 @@ export interface HelloPayload {
    * bind.update / prefs.state。老 server 校验器只查已知字段, 本字段安全透传。
    */
   features?: string[];
+  /**
+   * 是否由 Slack Bot 私信设备上下线通知。缺省表示旧客户端,server 按既有
+   * 默认开启处理;新客户端始终显式发送当前有效值。
+   */
+  lifecycleAnnouncement?: boolean;
 }
 
 /** welcome(server -> desktop): hello 的应答, 握手完成。 */
@@ -895,6 +906,17 @@ export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
 export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
 
 /**
+ * server 支持 hello.lifecycleAnnouncement 与 lifecycle.preference,可由
+ * desktop 设置页即时控制该设备的 Slack Bot 上下线私信。
+ */
+export const HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT = 'lifecycle-announcement-v1';
+
+/** lifecycle.preference(desktop -> server): 即时更新本设备的通知偏好。 */
+export interface LifecyclePreferencePayload {
+  enabled: boolean;
+}
+
+/**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
  * workspaces 清单首位(绑定到它的任务以无项目目录的对话模式运行), 真实
  * 目录别名不许撞名(desktop 侧校验)。server 据此识别伪目录: 清单里只剩
@@ -1062,6 +1084,10 @@ export type HookProviderPrefsStateMessage = HookEnvelope<
   ProviderPrefsStatePayload
 >;
 export type HookGroupMessageMessage = HookEnvelope<'group.message', GroupMessagePayload>;
+export type HookLifecyclePreferenceMessage = HookEnvelope<
+  'lifecycle.preference',
+  LifecyclePreferencePayload
+>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -1097,7 +1123,8 @@ export type HookMessage =
   | HookProviderPrefsGetMessage
   | HookProviderPrefsSetMessage
   | HookProviderPrefsStateMessage
-  | HookGroupMessageMessage;
+  | HookGroupMessageMessage
+  | HookLifecyclePreferenceMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };

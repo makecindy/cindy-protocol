@@ -26,6 +26,7 @@ import {
   type HookInteractionCancelMessage,
   type HookInteractionDecisionMessage,
   type HookInteractionRequestMessage,
+  type HookLifecyclePreferenceMessage,
   type HookMessage,
   type HookMessageType,
   type HookPingMessage,
@@ -57,6 +58,7 @@ import {
   type InteractionCancelPayload,
   type InteractionDecisionPayload,
   type InteractionRequestPayload,
+  type LifecyclePreferencePayload,
   type PrefsGetPayload,
   type PrefsSetPayload,
   type PrefsStatePayload,
@@ -261,6 +263,12 @@ export function makeToolResponse(payload: ToolResponsePayload): HookToolResponse
 
 export function makeGroupMessage(payload: GroupMessagePayload): HookGroupMessageMessage {
   return envelope('group.message', payload);
+}
+
+export function makeLifecyclePreference(
+  payload: LifecyclePreferencePayload,
+): HookLifecyclePreferenceMessage {
+  return envelope('lifecycle.preference', payload);
 }
 
 /** 序列化为 WS 文本帧。与 parseHookMessage 互为逆操作。 */
