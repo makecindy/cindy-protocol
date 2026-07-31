@@ -17,7 +17,11 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_TELEGRAM_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
+  PROVIDER_BEHAVIOR_PROVIDERS,
+  TELEGRAM_EMOJI_REACTIONS,
   TELEGRAM_GROUP_ACTIVATION_ALWAYS,
+  TELEGRAM_REPLY_QUOTE_DM,
+  TELEGRAM_REPLY_QUOTE_GROUP,
   makeProviderBehaviorGet,
   makeProviderBehaviorSet,
   makeProviderBehaviorState,
@@ -144,6 +148,13 @@ const STATE_UNBOUND: ProviderBehaviorStatePayload = {
 describe('provider.behavior(阶段 19)', () => {
   it('能力标识常量', () => {
     expect(HOOK_FEATURE_PROVIDER_BEHAVIOR).toBe('provider-behavior-v1');
+  });
+
+  it('导出的 provider/behavior 枚举表在运行时不可变', () => {
+    expect(Object.isFrozen(PROVIDER_BEHAVIOR_PROVIDERS)).toBe(true);
+    expect(Object.isFrozen(TELEGRAM_EMOJI_REACTIONS)).toBe(true);
+    expect(Object.isFrozen(TELEGRAM_REPLY_QUOTE_DM)).toBe(true);
+    expect(Object.isFrozen(TELEGRAM_REPLY_QUOTE_GROUP)).toBe(true);
   });
 
   it('DEFAULT_TELEGRAM_BEHAVIOR 与个人版桌面客户端出厂默认对齐', () => {

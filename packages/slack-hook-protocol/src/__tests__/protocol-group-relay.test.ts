@@ -128,25 +128,27 @@ describe('group.message(阶段 14)', () => {
     // 只带其中一个也应放行。
     roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', id: '202' } }));
     roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', username: 'user202' } }));
-    // 边界: id 恰好 20 位数字、username 恰好 32 位字符都必须放行。
-    roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', id: '1'.repeat(20) } }));
+    // 边界: id 恰好为 52-bit 上限、username 恰好 32 位字符都必须放行。
+    roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', id: '4503599627370495' } }));
     roundTrip(
       makeGroupMessage({ ...FULL, author: { name: '@user202', username: 'u'.repeat(32) } }),
     );
   });
 
-  it('author.id 按 Telegram 契约收紧: 仅十进制、1~20 位', () => {
+  it('author.id 按 Telegram 契约收紧: 规范正整数且在 52-bit 范围内', () => {
     expectReject(
       { ...makeGroupMessage(FULL), payload: { ...FULL, author: { name: '@user202', id: '' } } },
       'author.id',
     );
-    expectReject(
-      {
-        ...makeGroupMessage(FULL),
-        payload: { ...FULL, author: { name: '@user202', id: '1'.repeat(21) } },
-      },
-      'author.id',
-    );
+    for (const id of ['0', '001', '4503599627370496', '1'.repeat(21)]) {
+      expectReject(
+        {
+          ...makeGroupMessage(FULL),
+          payload: { ...FULL, author: { name: '@user202', id } },
+        },
+        'author.id',
+      );
+    }
     expectReject(
       {
         ...makeGroupMessage(FULL),

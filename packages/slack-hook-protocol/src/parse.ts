@@ -102,7 +102,8 @@ function validateProviderBehaviorProvider(v: unknown, path: string): string | nu
 /** Telegram group/channel ids are canonical negative integers within Bot API's 52-bit range. */
 const TELEGRAM_CHAT_ID_MAX_CHARS = 32;
 const TELEGRAM_GROUP_CHAT_ID_PATTERN = /^-[1-9][0-9]*$/;
-const TELEGRAM_CHAT_ID_MIN = -((1n << 52n) - 1n);
+const TELEGRAM_ID_MAX = (1n << 52n) - 1n;
+const TELEGRAM_CHAT_ID_MIN = -TELEGRAM_ID_MAX;
 
 function isTelegramGroupChatId(v: unknown): v is string {
   if (
@@ -1080,15 +1081,17 @@ const GROUP_MESSAGE_FILE_NAMES_MAX = 20;
 const GROUP_MESSAGE_FILE_NAME_CHARS_MAX = 256;
 /**
  * author.id / author.username 按 Telegram 当前实际契约收紧(见 types.ts
- * GroupMessageAuthor 的文档注释): id 是 Telegram 数字 user id 的十进制字符串
- * (1~20 位正整数字符, 不含符号), username 是 Telegram @handle(仅
+ * GroupMessageAuthor 的文档注释): id 是 Telegram 数字 user id 的规范十进制
+ * 正整数字符串(无前导零,在 Bot API 52-bit 范围内), username 是 Telegram @handle(仅
  * [A-Za-z0-9_], 1~32 位)。
  */
-const GROUP_MESSAGE_AUTHOR_ID_PATTERN = /^[0-9]{1,20}$/;
+const GROUP_MESSAGE_AUTHOR_ID_PATTERN = /^[1-9][0-9]*$/;
 const GROUP_MESSAGE_AUTHOR_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,32}$/;
 
 function isGroupMessageAuthorId(v: unknown): v is string {
-  return typeof v === 'string' && GROUP_MESSAGE_AUTHOR_ID_PATTERN.test(v);
+  return (
+    typeof v === 'string' && GROUP_MESSAGE_AUTHOR_ID_PATTERN.test(v) && BigInt(v) <= TELEGRAM_ID_MAX
+  );
 }
 
 function isGroupMessageAuthorUsername(v: unknown): v is string {
@@ -1113,7 +1116,7 @@ function validateGroupMessage(p: Record<string, unknown>): string | null {
   }
   // id / username 可选(旧生产端不发时省略), present 时按 Telegram 契约校验
   if (p.author.id !== undefined && !isGroupMessageAuthorId(p.author.id)) {
-    return 'group.message.author.id must be a decimal Telegram user id string of 1-20 digits';
+    return 'group.message.author.id must be a canonical positive Telegram user id within the 52-bit Bot API range';
   }
   if (p.author.username !== undefined && !isGroupMessageAuthorUsername(p.author.username)) {
     return 'group.message.author.username must match [A-Za-z0-9_]{1,32}';

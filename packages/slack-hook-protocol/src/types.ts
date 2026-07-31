@@ -1066,19 +1066,19 @@ export interface ProviderPrefsStatePayload extends ProviderPrefsSelector {
  * here later requires a deliberate look at whether these exact fields still
  * make sense for that provider, not just a permissive type-level allowance.
  */
-export const PROVIDER_BEHAVIOR_PROVIDERS = ['telegram'] as const;
+export const PROVIDER_BEHAVIOR_PROVIDERS = Object.freeze(['telegram'] as const);
 export type ProviderBehaviorProvider = (typeof PROVIDER_BEHAVIOR_PROVIDERS)[number];
 
 /** Emoji reaction verbosity on Telegram messages the bot sees/sends. */
-export const TELEGRAM_EMOJI_REACTIONS = ['off', 'minimal', 'expressive'] as const;
+export const TELEGRAM_EMOJI_REACTIONS = Object.freeze(['off', 'minimal', 'expressive'] as const);
 export type TelegramEmojiReactions = (typeof TELEGRAM_EMOJI_REACTIONS)[number];
 
 /** Whether a DM reply quotes the message it answers. */
-export const TELEGRAM_REPLY_QUOTE_DM = ['off', 'first'] as const;
+export const TELEGRAM_REPLY_QUOTE_DM = Object.freeze(['off', 'first'] as const);
 export type TelegramReplyQuoteDm = (typeof TELEGRAM_REPLY_QUOTE_DM)[number];
 
 /** Whether a group reply quotes the message(s) it answers. */
-export const TELEGRAM_REPLY_QUOTE_GROUP = ['off', 'first', 'all'] as const;
+export const TELEGRAM_REPLY_QUOTE_GROUP = Object.freeze(['off', 'first', 'all'] as const);
 export type TelegramReplyQuoteGroup = (typeof TELEGRAM_REPLY_QUOTE_GROUP)[number];
 
 /**
@@ -1324,8 +1324,8 @@ export const HOOK_FEATURE_GROUP_RELAY = 'group-relay-v1';
  * 本身仍是开放 provider 集合, 但这两个新字段目前只有 Telegram 生产端会填,
  * 形状即按 Telegram 定义; 未来若有其它 provider 要填这两个字段且形状不同,
  * 需要重新评估这里的校验, 而不是放宽成万能字符串):
- *   - id: Telegram 数字 user id 的十进制字符串, 1~20 位正整数字符(不含符号/
- *     空白), 见 GROUP_MESSAGE_AUTHOR_ID_PATTERN;
+ *   - id: Telegram 数字 user id 的规范十进制正整数字符串(无前导零,在 Bot API
+ *     52-bit 范围内), 见 GROUP_MESSAGE_AUTHOR_ID_PATTERN;
  *   - username: Telegram @handle, 仅 [A-Za-z0-9_]，1~32 位, 见
  *     GROUP_MESSAGE_AUTHOR_USERNAME_PATTERN。
  */
@@ -1333,7 +1333,7 @@ export interface GroupMessageAuthor {
   name: string;
   /** 是否为 bot(含 Cindy 自身出站回复的回流条目)。 */
   isBot?: boolean;
-  /** Telegram 数字 user id 的十进制字符串(1~20 位); 拿不到时省略。 */
+  /** Telegram 数字 user id 的规范十进制正整数字符串(52-bit 范围内); 拿不到时省略。 */
   id?: string;
   /** Telegram @handle(不含 @ 前缀, [A-Za-z0-9_]{1,32}); 拿不到时省略。 */
   username?: string;
