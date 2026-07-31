@@ -1105,11 +1105,11 @@ export interface TelegramBehaviorFields {
  * reactions default to 'minimal', DM reply-quoting defaults off, and group
  * reply-quoting defaults to quoting the first message of a burst.
  */
-export const DEFAULT_TELEGRAM_BEHAVIOR: TelegramBehaviorFields = {
+export const DEFAULT_TELEGRAM_BEHAVIOR: Readonly<TelegramBehaviorFields> = Object.freeze({
   emojiReactions: 'minimal',
   replyQuoteDm: 'off',
   replyQuoteGroup: 'first',
-};
+});
 
 /**
  * Selector for provider.behavior.* frames. Deliberately narrower than
@@ -1180,8 +1180,10 @@ export interface ProviderBehaviorSetPayload extends ProviderBehaviorSelector {
  * an unsolicited push after some other client mutates it (replyTo null).
  * The three behavior fields are the *resolved* values (never a raw patch).
  * groupActivation lists only chats that deviate from the default — chats the
- * user never touched are implicitly 'mention' and are not enumerated (bounded
- * map, see parse's PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS).
+ * user never touched are implicitly 'mention' and are not enumerated. The
+ * enclosing frame remains bounded by HOOK_MAX_FRAME_CHARS; the map itself has
+ * no lower entry cap because every valid set mutation must remain representable
+ * in a later authoritative state snapshot.
  * Field linkage (parse enforced): bound=false collapses the whole snapshot to
  * DEFAULT_TELEGRAM_BEHAVIOR and an empty groupActivation — there is no
  * principal to hold per-chat overrides for an unbound selector, so a stale

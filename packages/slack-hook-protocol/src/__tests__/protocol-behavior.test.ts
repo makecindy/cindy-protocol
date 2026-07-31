@@ -6,7 +6,7 @@
  *      清除), 各自取值校验, 以及"至少一个实际 patch"的空 set 拒收(null 也算
  *      一次真实改动)
  *   4. state: 三个全局字段收敛为必填非空枚举(从不是 patch、从不是 null)、
- *      groupActivation 的形状/上限/取值校验, 以及 bound=false -> 默认值 + 空
+ *      groupActivation 的形状/取值校验与累积可表达性, 以及 bound=false -> 默认值 + 空
  *      groupActivation 的字段联动(parse 强制)
  *   5. 能力标识常量 provider-behavior-v1
  *   6. DEFAULT_TELEGRAM_BEHAVIOR 与个人版桌面客户端出厂默认对齐
@@ -152,6 +152,10 @@ describe('provider.behavior(阶段 19)', () => {
       replyQuoteDm: 'off',
       replyQuoteGroup: 'first',
     });
+    expect(Object.isFrozen(DEFAULT_TELEGRAM_BEHAVIOR)).toBe(true);
+    expect(() => {
+      (DEFAULT_TELEGRAM_BEHAVIOR as { emojiReactions: string }).emojiReactions = 'off';
+    }).toThrow(TypeError);
   });
 
   it('round-trip: get', () => {
@@ -325,7 +329,7 @@ describe('provider.behavior(阶段 19)', () => {
     );
   });
 
-  it('state: groupActivation 形状、上限、键值校验', () => {
+  it('state: groupActivation 形状、键值校验与累积可表达性', () => {
     const state = makeProviderBehaviorState(STATE_BOUND_NON_DEFAULT);
     expectReject(
       { ...state, payload: { ...STATE_BOUND_NON_DEFAULT, groupActivation: 'not-an-object' } },
@@ -348,12 +352,11 @@ describe('provider.behavior(阶段 19)', () => {
       },
       `must be '${TELEGRAM_GROUP_ACTIVATION_ALWAYS}'`,
     );
-    const oversized = Object.fromEntries(
+    const accumulated: Record<string, typeof TELEGRAM_GROUP_ACTIVATION_ALWAYS> = Object.fromEntries(
       Array.from({ length: 501 }, (_, i) => [`-${i + 1}`, TELEGRAM_GROUP_ACTIVATION_ALWAYS]),
     );
-    expectReject(
-      { ...state, payload: { ...STATE_BOUND_NON_DEFAULT, groupActivation: oversized } },
-      'at most 500 entries',
+    roundTrip(
+      makeProviderBehaviorState({ ...STATE_BOUND_NON_DEFAULT, groupActivation: accumulated }),
     );
   });
 

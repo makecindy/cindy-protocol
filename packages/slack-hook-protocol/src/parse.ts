@@ -928,9 +928,8 @@ function validateProviderPrefsState(p: Record<string, unknown>): string | null {
 }
 
 // ── Provider-neutral behavior (Telegram, append-only v1) ───────────────────
-// 见文件头第 19 条; 帮 groupActivation 加了个数上限, 防止无界对象攻击。
-
-const PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS = 500;
+// 见文件头第 19 条。groupActivation 不另设条目上限：每次合法 set 都必须能在
+// 后续 state 全量快照中表达；整帧仍受 HOOK_MAX_FRAME_CHARS 的统一上限保护。
 
 /**
  * provider.behavior.* 选择器: 与 provider.prefs.* 不同, 只认 bindingId
@@ -1038,9 +1037,6 @@ function validateProviderBehaviorState(p: Record<string, unknown>): string | nul
     return 'provider.behavior.state.groupActivation must be an object';
   }
   const entries = Object.entries(p.groupActivation);
-  if (entries.length > PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS) {
-    return `provider.behavior.state.groupActivation must have at most ${PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS} entries`;
-  }
   for (const [chatId, value] of entries) {
     if (!isTelegramChatId(chatId)) {
       return `provider.behavior.state.groupActivation key must be a Telegram chat id string of at most ${TELEGRAM_CHAT_ID_MAX_CHARS} chars`;
