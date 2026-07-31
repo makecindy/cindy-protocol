@@ -109,6 +109,128 @@ describe('group.message(阶段 14)', () => {
     roundTrip(makeGroupMessage({ ...FULL, provider: 'discord' }));
   });
 
+  it('author.id / author.username(阶段 19 追加, 可选): 携带时 round-trip, 省略时(老形态)仍照常通过', () => {
+    // 老形态: 无 id/username, 与 FULL 完全一致 —— 已在上面的 round-trip 用例覆盖,
+    // 这里再显式断言一次解析结果里两个字段确实缺席(而非被静默填充成 undefined 之外的值)。
+    const legacy = roundTrip(makeGroupMessage(FULL));
+    expect((legacy.payload as GroupMessagePayload).author).toEqual({
+      name: '@user202',
+      isBot: false,
+    });
+
+    // 新形态: 两个字段都带上(Telegram 真实契约: id 纯数字, username 字母数字下划线)。
+    roundTrip(
+      makeGroupMessage({
+        ...FULL,
+        author: { name: '@user202', isBot: false, id: '202', username: 'user202' },
+      }),
+    );
+    // 只带其中一个也应放行。
+    roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', id: '202' } }));
+    roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', username: 'user202' } }));
+    // 边界: id 恰好 20 位数字、username 恰好 32 位字符都必须放行。
+    roundTrip(makeGroupMessage({ ...FULL, author: { name: '@user202', id: '1'.repeat(20) } }));
+    roundTrip(
+      makeGroupMessage({ ...FULL, author: { name: '@user202', username: 'u'.repeat(32) } }),
+    );
+  });
+
+  it('author.id 按 Telegram 契约收紧: 仅十进制、1~20 位', () => {
+    expectReject(
+      { ...makeGroupMessage(FULL), payload: { ...FULL, author: { name: '@user202', id: '' } } },
+      'author.id',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: '1'.repeat(21) } },
+      },
+      'author.id',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: 'has space' } },
+      },
+      'author.id',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: 42 } },
+      },
+      'author.id',
+    );
+    // 收紧前(通用可打印 ASCII)允许的形态, 收紧后必须拒收: 字母、符号、负号。
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: 'abc123' } },
+      },
+      'author.id',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: '-202' } },
+      },
+      'author.id',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', id: '202.0' } },
+      },
+      'author.id',
+    );
+  });
+
+  it('author.username 按 Telegram 契约收紧: 仅 [A-Za-z0-9_], 1~32 位', () => {
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: '' } },
+      },
+      'author.username',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: 'u'.repeat(33) } },
+      },
+      'author.username',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: 'has space' } },
+      },
+      'author.username',
+    );
+    // 收紧前(通用可打印 ASCII)允许的形态, 收紧后必须拒收: 连字符、@ 前缀、点号。
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: 'user-202' } },
+      },
+      'author.username',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: '@user202' } },
+      },
+      'author.username',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, author: { name: '@user202', username: 'user.202' } },
+      },
+      'author.username',
+    );
+  });
+
   it('task.dispatch.source.triggerMessageId: 可选、非空字符串或显式 null', () => {
     const dispatch = makeTaskDispatch({
       requestId: 'req-1',

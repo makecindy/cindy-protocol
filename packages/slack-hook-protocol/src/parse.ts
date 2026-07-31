@@ -13,15 +13,21 @@
 
 import {
   BIND_UPDATE_STATES,
+  DEFAULT_TELEGRAM_BEHAVIOR,
   HOOK_MAX_FRAME_CHARS,
   HOOK_MESSAGE_TYPES,
   HOOK_PROVIDERS,
   HOOK_PROTOCOL_VERSION,
   MAX_INTERACTION_BUTTONS,
+  PROVIDER_BEHAVIOR_PROVIDERS,
   QUERY_KINDS,
   PROVIDER_BIND_STATES,
   TASK_ACK_RESULTS,
   TASK_REJECT_REASONS,
+  TELEGRAM_EMOJI_REACTIONS,
+  TELEGRAM_GROUP_ACTIVATION_ALWAYS,
+  TELEGRAM_REPLY_QUOTE_DM,
+  TELEGRAM_REPLY_QUOTE_GROUP,
   TURN_END_STATUSES,
   type BindUpdatePayload,
   type HookMessage,
@@ -82,6 +88,45 @@ function isSafeHttpsUrl(v: unknown): v is string {
 function validateProvider(v: unknown, path: string): string | null {
   if (!HOOK_PROVIDERS.includes(v as never)) {
     return `${path} must be one of: ${HOOK_PROVIDERS.join(', ')}`;
+  }
+  return null;
+}
+
+function validateProviderBehaviorProvider(v: unknown, path: string): string | null {
+  if (!PROVIDER_BEHAVIOR_PROVIDERS.includes(v as never)) {
+    return `${path} must be one of: ${PROVIDER_BEHAVIOR_PROVIDERS.join(', ')}`;
+  }
+  return null;
+}
+
+/** Telegram chat ids are decimal integers (negative for supergroups/channels). */
+const TELEGRAM_CHAT_ID_MAX_CHARS = 32;
+const TELEGRAM_CHAT_ID_PATTERN = /^-?[0-9]+$/;
+
+function isTelegramChatId(v: unknown): v is string {
+  return (
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= TELEGRAM_CHAT_ID_MAX_CHARS &&
+    TELEGRAM_CHAT_ID_PATTERN.test(v)
+  );
+}
+
+/**
+ * Optional nullable-enum patch field (provider.behavior.set's three global
+ * fields): undefined = untouched; null = explicit clear (revert to whatever
+ * DEFAULT_TELEGRAM_BEHAVIOR carries for this field); a string must be a known
+ * enum member (set as an explicit override, persisted even if it happens to
+ * equal the current default — see ProviderBehaviorSetPayload's docblock).
+ */
+function validateOptionalNullableEnum(
+  v: unknown,
+  allowed: readonly string[],
+  path: string,
+): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string' || !allowed.includes(v)) {
+    return `${path} must be one of: ${allowed.join(', ')}, or null, when present`;
   }
   return null;
 }
@@ -882,11 +927,166 @@ function validateProviderPrefsState(p: Record<string, unknown>): string | null {
   return null;
 }
 
+// ── Provider-neutral behavior (Telegram, append-only v1) ───────────────────
+// 见文件头第 19 条; 帮 groupActivation 加了个数上限, 防止无界对象攻击。
+
+const PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS = 500;
+
+/**
+ * provider.behavior.* 选择器: 与 provider.prefs.* 不同, 只认 bindingId
+ * (非空必填), 不支持 scopeId —— 行为配置在绑定成立前没有意义。
+ */
+function validateProviderBehaviorSelector(
+  p: Record<string, unknown>,
+  label: 'provider.behavior.get' | 'provider.behavior.set' | 'provider.behavior.state',
+): string | null {
+  const providerError = validateProviderBehaviorProvider(p.provider, `${label}.provider`);
+  if (providerError) return providerError;
+  if (!isNonEmptyString(p.bindingId)) {
+    return `${label}.bindingId must be a non-empty string`;
+  }
+  return null;
+}
+
+function validateProviderBehaviorGet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.behavior.get.requestId must be a non-empty string';
+  }
+  return validateProviderBehaviorSelector(p, 'provider.behavior.get');
+}
+
+/**
+ * groupActivation patch/clear 的形状校验(set 与 state 共用大部分逻辑不同,
+ * 这里只做 set 的单条 patch 校验; state 的 map 校验在 validateProviderBehaviorState)。
+ */
+function validateGroupActivationPatch(v: unknown): string | null {
+  if (!isPlainObject(v)) {
+    return 'provider.behavior.set.groupActivation must be an object when present';
+  }
+  if (!isTelegramChatId(v.chatId)) {
+    return `provider.behavior.set.groupActivation.chatId must be a Telegram chat id string of at most ${TELEGRAM_CHAT_ID_MAX_CHARS} chars`;
+  }
+  if (v.value !== null && v.value !== TELEGRAM_GROUP_ACTIVATION_ALWAYS) {
+    return `provider.behavior.set.groupActivation.value must be '${TELEGRAM_GROUP_ACTIVATION_ALWAYS}' or null`;
+  }
+  return null;
+}
+
+function validateProviderBehaviorSet(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'provider.behavior.set.requestId must be a non-empty string';
+  }
+  const selectorError = validateProviderBehaviorSelector(p, 'provider.behavior.set');
+  if (selectorError) return selectorError;
+
+  const emojiError = validateOptionalNullableEnum(
+    p.emojiReactions,
+    TELEGRAM_EMOJI_REACTIONS,
+    'provider.behavior.set.emojiReactions',
+  );
+  if (emojiError) return emojiError;
+  const dmError = validateOptionalNullableEnum(
+    p.replyQuoteDm,
+    TELEGRAM_REPLY_QUOTE_DM,
+    'provider.behavior.set.replyQuoteDm',
+  );
+  if (dmError) return dmError;
+  const groupQuoteError = validateOptionalNullableEnum(
+    p.replyQuoteGroup,
+    TELEGRAM_REPLY_QUOTE_GROUP,
+    'provider.behavior.set.replyQuoteGroup',
+  );
+  if (groupQuoteError) return groupQuoteError;
+
+  let hasGroupActivationPatch = false;
+  if (p.groupActivation !== undefined) {
+    const patchError = validateGroupActivationPatch(p.groupActivation);
+    if (patchError) return patchError;
+    hasGroupActivationPatch = true;
+  }
+
+  // 至少一个实际 patch: 空 set 没有可观察反馈, 直接拒收比静默 no-op 更安全
+  const hasBehaviorPatch =
+    p.emojiReactions !== undefined ||
+    p.replyQuoteDm !== undefined ||
+    p.replyQuoteGroup !== undefined;
+  if (!hasBehaviorPatch && !hasGroupActivationPatch) {
+    return 'provider.behavior.set must include at least one behavior field or a groupActivation patch';
+  }
+  return null;
+}
+
+function validateProviderBehaviorState(p: Record<string, unknown>): string | null {
+  const selectorError = validateProviderBehaviorSelector(p, 'provider.behavior.state');
+  if (selectorError) return selectorError;
+  if (!isNullableNonEmptyString(p.replyTo)) {
+    return 'provider.behavior.state.replyTo must be a non-empty string or null';
+  }
+  if (typeof p.bound !== 'boolean') return 'provider.behavior.state.bound must be a boolean';
+
+  if (!TELEGRAM_EMOJI_REACTIONS.includes(p.emojiReactions as never)) {
+    return `provider.behavior.state.emojiReactions must be one of: ${TELEGRAM_EMOJI_REACTIONS.join(', ')}`;
+  }
+  if (!TELEGRAM_REPLY_QUOTE_DM.includes(p.replyQuoteDm as never)) {
+    return `provider.behavior.state.replyQuoteDm must be one of: ${TELEGRAM_REPLY_QUOTE_DM.join(', ')}`;
+  }
+  if (!TELEGRAM_REPLY_QUOTE_GROUP.includes(p.replyQuoteGroup as never)) {
+    return `provider.behavior.state.replyQuoteGroup must be one of: ${TELEGRAM_REPLY_QUOTE_GROUP.join(', ')}`;
+  }
+
+  if (!isPlainObject(p.groupActivation)) {
+    return 'provider.behavior.state.groupActivation must be an object';
+  }
+  const entries = Object.entries(p.groupActivation);
+  if (entries.length > PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS) {
+    return `provider.behavior.state.groupActivation must have at most ${PROVIDER_BEHAVIOR_MAX_GROUP_ACTIVATIONS} entries`;
+  }
+  for (const [chatId, value] of entries) {
+    if (!isTelegramChatId(chatId)) {
+      return `provider.behavior.state.groupActivation key must be a Telegram chat id string of at most ${TELEGRAM_CHAT_ID_MAX_CHARS} chars`;
+    }
+    if (value !== TELEGRAM_GROUP_ACTIVATION_ALWAYS) {
+      return `provider.behavior.state.groupActivation[${chatId}] must be '${TELEGRAM_GROUP_ACTIVATION_ALWAYS}'`;
+    }
+  }
+
+  // 字段联动(parse 强制): 未绑定没有主体持有 per-chat 覆盖, 必须收敛为默认快照
+  if (!p.bound) {
+    if (
+      p.emojiReactions !== DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions ||
+      p.replyQuoteDm !== DEFAULT_TELEGRAM_BEHAVIOR.replyQuoteDm ||
+      p.replyQuoteGroup !== DEFAULT_TELEGRAM_BEHAVIOR.replyQuoteGroup
+    ) {
+      return 'provider.behavior.state must report the default behavior when bound is false';
+    }
+    if (entries.length > 0) {
+      return 'provider.behavior.state.groupActivation must be empty when bound is false';
+    }
+  }
+  return null;
+}
+
 // ── 阶段 14: 群消息中继 ──────────────────────────────────────────────────────
 
 const GROUP_MESSAGE_TEXT_MAX = 8_192;
 const GROUP_MESSAGE_FILE_NAMES_MAX = 20;
 const GROUP_MESSAGE_FILE_NAME_CHARS_MAX = 256;
+/**
+ * author.id / author.username 按 Telegram 当前实际契约收紧(见 types.ts
+ * GroupMessageAuthor 的文档注释): id 是 Telegram 数字 user id 的十进制字符串
+ * (1~20 位正整数字符, 不含符号), username 是 Telegram @handle(仅
+ * [A-Za-z0-9_], 1~32 位)。
+ */
+const GROUP_MESSAGE_AUTHOR_ID_PATTERN = /^[0-9]{1,20}$/;
+const GROUP_MESSAGE_AUTHOR_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,32}$/;
+
+function isGroupMessageAuthorId(v: unknown): v is string {
+  return typeof v === 'string' && GROUP_MESSAGE_AUTHOR_ID_PATTERN.test(v);
+}
+
+function isGroupMessageAuthorUsername(v: unknown): v is string {
+  return typeof v === 'string' && GROUP_MESSAGE_AUTHOR_USERNAME_PATTERN.test(v);
+}
 
 function validateGroupMessage(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.provider)) return 'group.message.provider must be a non-empty string';
@@ -903,6 +1103,13 @@ function validateGroupMessage(p: Record<string, unknown>): string | null {
   }
   if (p.author.isBot !== undefined && typeof p.author.isBot !== 'boolean') {
     return 'group.message.author.isBot must be a boolean';
+  }
+  // id / username 可选(旧生产端不发时省略), present 时按 Telegram 契约校验
+  if (p.author.id !== undefined && !isGroupMessageAuthorId(p.author.id)) {
+    return 'group.message.author.id must be a decimal Telegram user id string of 1-20 digits';
+  }
+  if (p.author.username !== undefined && !isGroupMessageAuthorUsername(p.author.username)) {
+    return 'group.message.author.username must match [A-Za-z0-9_]{1,32}';
   }
   if (typeof p.text !== 'string' || p.text.length > GROUP_MESSAGE_TEXT_MAX) {
     return `group.message.text must be a string of at most ${GROUP_MESSAGE_TEXT_MAX} chars`;
@@ -964,6 +1171,9 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'tool.response': validateToolResponse,
   'group.message': validateGroupMessage,
   'lifecycle.preference': validateLifecyclePreference,
+  'provider.behavior.get': validateProviderBehaviorGet,
+  'provider.behavior.set': validateProviderBehaviorSet,
+  'provider.behavior.state': validateProviderBehaviorState,
 };
 
 /**
