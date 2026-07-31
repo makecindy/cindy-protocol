@@ -186,6 +186,82 @@ describe('public model registry contract', () => {
     expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
   });
 
+  it('rejects client provenance and every other field outside the versioned schema', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    const price = route.referencePrices![0]!;
+    const cases: [unknown, string][] = [
+      [{ ...VALID_REGISTRY, contextWindowVerified: true }, 'modelRegistry.contextWindowVerified'],
+      [
+        {
+          ...VALID_REGISTRY,
+          models: [{ ...entry, contextWindowExplicit: true }],
+        },
+        'modelRegistry.models[0].contextWindowExplicit',
+      ],
+      [
+        {
+          ...VALID_REGISTRY,
+          models: [
+            {
+              ...entry,
+              routes: [{ ...route, discoveredAt: '2026-07-31T00:00:00.000Z' }],
+            },
+          ],
+        },
+        'modelRegistry.models[0].routes[0].discoveredAt',
+      ],
+      [
+        {
+          ...VALID_REGISTRY,
+          models: [{ ...entry, perAgent: { codex: { verified: true } } }],
+        },
+        'modelRegistry.models[0].perAgent.codex.verified',
+      ],
+      [
+        {
+          ...VALID_REGISTRY,
+          models: [
+            {
+              ...entry,
+              routes: [
+                {
+                  ...route,
+                  referencePrices: [{ ...price, userOverride: true }],
+                },
+              ],
+            },
+          ],
+        },
+        'modelRegistry.models[0].routes[0].referencePrices[0].userOverride',
+      ],
+      [
+        {
+          ...VALID_REGISTRY,
+          models: [
+            {
+              ...entry,
+              routes: [
+                {
+                  ...route,
+                  referencePrices: [
+                    {
+                      ...price,
+                      source: { ...price.source, internalNote: 'client-only' },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        'modelRegistry.models[0].routes[0].referencePrices[0].source.internalNote',
+      ],
+    ];
+
+    for (const [value, path] of cases) expectRegistryReject(value, path);
+  });
+
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
     expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 2 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(

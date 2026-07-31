@@ -56,6 +56,47 @@ const PRICING_FIELDS = [
   'outputCostPerVideoPerSecond',
 ] as const;
 
+const MODEL_REGISTRY_FIELDS = ['schemaVersion', 'updatedAt', 'models'] as const;
+const MODEL_REGISTRY_ENTRY_FIELDS = [
+  'id',
+  'name',
+  'routes',
+  'status',
+  'group',
+  'description',
+  'contextWindow',
+  'maxOutputTokens',
+  'efforts',
+  'defaultEffort',
+  'sortOrder',
+  'supportsFastMode',
+  'defaultEnabled',
+  'perAgent',
+] as const;
+const MODEL_REGISTRY_ROUTE_FIELDS = ['providerId', 'modelId', 'agents', 'referencePrices'] as const;
+const MODEL_REGISTRY_AGENT_OVERRIDE_FIELDS = [
+  'contextWindow',
+  'efforts',
+  'defaultEffort',
+  'supportsFastMode',
+  'defaultEnabled',
+] as const;
+const MODEL_REFERENCE_PRICE_FIELDS = [
+  'currency',
+  'variant',
+  'inputPerMtok',
+  'outputPerMtok',
+  'cacheReadPerMtok',
+  'cacheWritePerMtok',
+  'cacheWrite1hPerMtok',
+  'minInputTokens',
+  'maxInputTokens',
+  'effectiveFrom',
+  'effectiveUntil',
+  'source',
+] as const;
+const MODEL_REFERENCE_PRICE_SOURCE_FIELDS = ['kind', 'url', 'verifiedAt'] as const;
+
 function ok<T>(value: T): ModelAccessParseResult<T> {
   return { ok: true, value };
 }
@@ -66,6 +107,16 @@ function fail<T>(error: string): ModelAccessParseResult<T> {
 
 function isPlainObject(value: unknown): value is PlainObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function unknownFieldError(
+  value: PlainObject,
+  allowedFields: readonly string[],
+  path: string,
+): string | null {
+  const allowed = new Set(allowedFields);
+  const unknown = Object.keys(value).find((field) => !allowed.has(field));
+  return unknown ? `${path}.${unknown} is not allowed by this schema version` : null;
 }
 
 export function isModelCurrency(value: unknown): value is ModelCurrency {
@@ -156,9 +207,12 @@ function overrideError(
   value: unknown,
   path: string,
   baseEfforts: readonly ModelEffort[] | undefined,
+  allowedFields?: readonly string[],
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
+  let error = allowedFields ? unknownFieldError(value, allowedFields, path) : null;
+  if (error) return error;
+  error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
   error = effortListError(value.efforts, `${path}.efforts`);
   if (error) return error;
@@ -314,6 +368,8 @@ export function parseListModelsResponse(
 
 function referencePriceError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = unknownFieldError(value, MODEL_REFERENCE_PRICE_FIELDS, path);
+  if (error) return error;
   if (!isModelCurrency(value.currency)) return `${path}.currency must be CNY or USD`;
   if (!isModelPriceVariant(value.variant)) {
     return `${path}.variant must be a supported price variant`;
@@ -325,7 +381,7 @@ function referencePriceError(value: unknown, path: string): string | null {
     'cacheWritePerMtok',
     'cacheWrite1hPerMtok',
   ] as const) {
-    const error = optionalFiniteNumberError(value[field], `${path}.${field}`, {
+    error = optionalFiniteNumberError(value[field], `${path}.${field}`, {
       nonNegative: true,
     });
     if (error) return error;
@@ -357,6 +413,8 @@ function referencePriceError(value: unknown, path: string): string | null {
     }
   }
   if (!isPlainObject(value.source)) return `${path}.source must be an object`;
+  error = unknownFieldError(value.source, MODEL_REFERENCE_PRICE_SOURCE_FIELDS, `${path}.source`);
+  if (error) return error;
   if (value.source.kind !== 'provider-official') {
     return `${path}.source.kind must be provider-official`;
   }
@@ -369,6 +427,8 @@ function referencePriceError(value: unknown, path: string): string | null {
 
 function registryRouteError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = unknownFieldError(value, MODEL_REGISTRY_ROUTE_FIELDS, path);
+  if (error) return error;
   if (!isSafeSlug(value.providerId)) {
     return `${path}.providerId must use letters, numbers, underscores, or hyphens`;
   }
@@ -392,7 +452,7 @@ function registryRouteError(value: unknown, path: string): string | null {
       return `${path}.referencePrices must be an array when present`;
     }
     for (const [index, price] of value.referencePrices.entries()) {
-      const error = referencePriceError(price, `${path}.referencePrices[${index}]`);
+      error = referencePriceError(price, `${path}.referencePrices[${index}]`);
       if (error) return error;
     }
   }
@@ -401,6 +461,8 @@ function registryRouteError(value: unknown, path: string): string | null {
 
 function registryEntryError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = unknownFieldError(value, MODEL_REGISTRY_ENTRY_FIELDS, path);
+  if (error) return error;
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
   }
@@ -414,14 +476,14 @@ function registryEntryError(value: unknown, path: string): string | null {
     ['group', 128],
     ['description', 2_000],
   ] as const) {
-    const error = optionalStringError(value[key], `${path}.${key}`, max);
+    error = optionalStringError(value[key], `${path}.${key}`, max);
     if (error) return error;
   }
   for (const key of ['contextWindow', 'maxOutputTokens'] as const) {
-    const error = optionalPositiveIntegerError(value[key], `${path}.${key}`);
+    error = optionalPositiveIntegerError(value[key], `${path}.${key}`);
     if (error) return error;
   }
-  let error = effortListError(value.efforts, `${path}.efforts`);
+  error = effortListError(value.efforts, `${path}.efforts`);
   if (error) return error;
   if (value.defaultEffort !== undefined && !isModelEffort(value.defaultEffort)) {
     return `${path}.defaultEffort must be a supported effort value when present`;
@@ -469,7 +531,12 @@ function registryEntryError(value: unknown, path: string): string | null {
       if (!supportedAgents.has(agent)) {
         return `${path}.perAgent.${agent} must be supported by at least one route`;
       }
-      error = overrideError(override, `${path}.perAgent.${agent}`, efforts);
+      error = overrideError(
+        override,
+        `${path}.perAgent.${agent}`,
+        efforts,
+        MODEL_REGISTRY_AGENT_OVERRIDE_FIELDS,
+      );
       if (error) return error;
     }
   }
@@ -478,6 +545,8 @@ function registryEntryError(value: unknown, path: string): string | null {
 
 export function parseModelRegistry(value: unknown): ModelAccessParseResult<ModelRegistry> {
   if (!isPlainObject(value)) return fail('modelRegistry must be an object');
+  const unknownField = unknownFieldError(value, MODEL_REGISTRY_FIELDS, 'modelRegistry');
+  if (unknownField) return fail(unknownField);
   if (value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION) {
     return fail(`modelRegistry.schemaVersion must be ${MODEL_REGISTRY_SCHEMA_VERSION}`);
   }
