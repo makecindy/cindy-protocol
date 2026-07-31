@@ -1,7 +1,8 @@
 # Model Access 模型目录协议
 
 `@cindy/model-access-protocol` 是客户端与 model-access-server 共享的模型目录
-HTTP wire contract，覆盖 `GET /api/model-access/models` 的成功响应。
+HTTP wire contract，覆盖 `GET /api/model-access/models` 的成功响应，以及匿名公共
+Catalog 中可选的 `modelRegistry` 段。
 
 ## 版本
 
@@ -41,6 +42,58 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 
 后续新增可选字段可在 v1 内 append-only 演进；修改既有字段语义、移除字段或扩展闭合
 枚举时必须评估并升级 schema version。
+
+## 公共 modelRegistry
+
+`modelRegistry` 是 provider-independent 的模型定义和参考价控制面，作为可选顶层字段
+嵌入 `GET /api/model-catalog/catalog` 返回的同一份 Catalog JSON：
+
+```json
+{
+  "modelRegistry": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-07-31T00:00:00.000Z",
+    "models": [
+      {
+        "id": "openai/gpt-example",
+        "name": "GPT Example",
+        "contextWindow": 200000,
+        "routes": [
+          {
+            "providerId": "openai",
+            "modelId": "gpt-example",
+            "agents": ["codex"],
+            "referencePrices": [
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 1,
+                "outputPerMtok": 5,
+                "effectiveFrom": "2026-07-01",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://provider.example/pricing",
+                  "verifiedAt": "2026-07-31"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- `id` 是 Cindy 稳定的规范模型 id；`routes` 映射供应商实际接受的 model id 和 runtime。
+- 动态模型发现与 AIGateway 仍分别决定“当前是否可用”和 XD 的实际可售价格；
+  `modelRegistry` 不得把静态条目解释成可用授权，也不得覆盖 Gateway 实价。
+- 参考价格统一为每百万 token，可按输入 token 区间和生效日期声明多档价格。消费者
+  仅选择当前有效且命中输入区间的条目；无匹配价格就不估价，不猜测。
+- 每个参考价必须带官方 HTTPS 来源和最近核验日期。它表达第三方公开牌价估算，
+  不是用户账户的实际账单。
+- 旧客户端忽略整个可选段；新客户端遇到未知 registry 版本或非法内容时保留上一份
+  有效 registry，并继续使用 bundled fallback。
 
 协议包以 TypeScript 源码发布。Node16/NodeNext 消费方使用入口中的显式 `.js`
 扩展名；Metro/React Native 消费方应像现有 `device-link` workspace 包一样，把该

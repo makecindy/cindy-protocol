@@ -3,11 +3,17 @@ import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
+  MODEL_PRICE_VARIANTS,
+  MODEL_REGISTRY_SCHEMA_VERSION,
+  MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
   type ModelAccessParseResult,
   type ModelAgent,
   type ModelCurrency,
   type ModelEffort,
+  type ModelPriceVariant,
+  type ModelRegistry,
+  type ModelRegistryStatus,
 } from './types.js';
 
 type PlainObject = Record<string, unknown>;
@@ -72,6 +78,40 @@ function isModelAgent(value: unknown): value is ModelAgent {
 
 function isModelEffort(value: unknown): value is ModelEffort {
   return typeof value === 'string' && MODEL_ACCESS_EFFORTS.includes(value as ModelEffort);
+}
+
+function isModelRegistryStatus(value: unknown): value is ModelRegistryStatus {
+  return (
+    typeof value === 'string' && MODEL_REGISTRY_STATUSES.includes(value as ModelRegistryStatus)
+  );
+}
+
+function isModelPriceVariant(value: unknown): value is ModelPriceVariant {
+  return typeof value === 'string' && MODEL_PRICE_VARIANTS.includes(value as ModelPriceVariant);
+}
+
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function isSafeSlug(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]+$/.test(value);
+}
+
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 function optionalStringError(value: unknown, path: string, max: number): string | null {
@@ -270,4 +310,191 @@ export function parseListModelsResponse(
     if (error) return fail(error);
   }
   return ok(value as unknown as ListModelsResponse);
+}
+
+function referencePriceError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  if (!isModelCurrency(value.currency)) return `${path}.currency must be CNY or USD`;
+  if (!isModelPriceVariant(value.variant)) {
+    return `${path}.variant must be a supported price variant`;
+  }
+  for (const field of [
+    'inputPerMtok',
+    'outputPerMtok',
+    'cacheReadPerMtok',
+    'cacheWritePerMtok',
+    'cacheWrite1hPerMtok',
+  ] as const) {
+    const error = optionalFiniteNumberError(value[field], `${path}.${field}`, {
+      nonNegative: true,
+    });
+    if (error) return error;
+  }
+  if (value.inputPerMtok === undefined || value.outputPerMtok === undefined) {
+    return `${path} must declare inputPerMtok and outputPerMtok`;
+  }
+  for (const field of ['minInputTokens', 'maxInputTokens'] as const) {
+    if (
+      value[field] !== undefined &&
+      (!Number.isInteger(value[field]) || (value[field] as number) < 0)
+    ) {
+      return `${path}.${field} must be a non-negative integer when present`;
+    }
+  }
+  const min = typeof value.minInputTokens === 'number' ? value.minInputTokens : 0;
+  if (typeof value.maxInputTokens === 'number' && value.maxInputTokens <= min) {
+    return `${path}.maxInputTokens must be greater than minInputTokens`;
+  }
+  if (!isIsoDate(value.effectiveFrom)) {
+    return `${path}.effectiveFrom must be an ISO calendar date`;
+  }
+  if (value.effectiveUntil !== undefined) {
+    if (!isIsoDate(value.effectiveUntil)) {
+      return `${path}.effectiveUntil must be an ISO calendar date when present`;
+    }
+    if (value.effectiveUntil <= value.effectiveFrom) {
+      return `${path}.effectiveUntil must be after effectiveFrom`;
+    }
+  }
+  if (!isPlainObject(value.source)) return `${path}.source must be an object`;
+  if (value.source.kind !== 'provider-official') {
+    return `${path}.source.kind must be provider-official`;
+  }
+  if (!isHttpsUrl(value.source.url)) return `${path}.source.url must be an HTTPS URL`;
+  if (!isIsoDate(value.source.verifiedAt)) {
+    return `${path}.source.verifiedAt must be an ISO calendar date`;
+  }
+  return null;
+}
+
+function registryRouteError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  if (!isSafeSlug(value.providerId)) {
+    return `${path}.providerId must use letters, numbers, underscores, or hyphens`;
+  }
+  if (
+    typeof value.modelId !== 'string' ||
+    value.modelId.length === 0 ||
+    value.modelId.length > 256
+  ) {
+    return `${path}.modelId must be a non-empty string of at most 256 characters`;
+  }
+  if (
+    !Array.isArray(value.agents) ||
+    value.agents.length === 0 ||
+    value.agents.some((agent) => !isModelAgent(agent)) ||
+    new Set(value.agents).size !== value.agents.length
+  ) {
+    return `${path}.agents must be a unique non-empty array of supported agents`;
+  }
+  if (value.referencePrices !== undefined) {
+    if (!Array.isArray(value.referencePrices)) {
+      return `${path}.referencePrices must be an array when present`;
+    }
+    for (const [index, price] of value.referencePrices.entries()) {
+      const error = referencePriceError(price, `${path}.referencePrices[${index}]`);
+      if (error) return error;
+    }
+  }
+  return null;
+}
+
+function registryEntryError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
+    return `${path}.id must be a non-empty string of at most 256 characters`;
+  }
+  if (typeof value.name !== 'string' || value.name.length === 0 || value.name.length > 256) {
+    return `${path}.name must be a non-empty string of at most 256 characters`;
+  }
+  if (value.status !== undefined && !isModelRegistryStatus(value.status)) {
+    return `${path}.status must be a supported registry status`;
+  }
+  for (const [key, max] of [
+    ['group', 128],
+    ['description', 2_000],
+  ] as const) {
+    const error = optionalStringError(value[key], `${path}.${key}`, max);
+    if (error) return error;
+  }
+  for (const key of ['contextWindow', 'maxOutputTokens'] as const) {
+    const error = optionalPositiveIntegerError(value[key], `${path}.${key}`);
+    if (error) return error;
+  }
+  let error = effortListError(value.efforts, `${path}.efforts`);
+  if (error) return error;
+  if (value.defaultEffort !== undefined && !isModelEffort(value.defaultEffort)) {
+    return `${path}.defaultEffort must be a supported effort value when present`;
+  }
+  const efforts =
+    Array.isArray(value.efforts) && value.efforts.every(isModelEffort)
+      ? (value.efforts as ModelEffort[])
+      : undefined;
+  if (
+    value.defaultEffort !== undefined &&
+    efforts !== undefined &&
+    !efforts.includes(value.defaultEffort as ModelEffort)
+  ) {
+    return `${path}.defaultEffort must be included in ${path}.efforts`;
+  }
+  error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
+  if (error) return error;
+  for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') {
+      return `${path}.${key} must be a boolean when present`;
+    }
+  }
+  if (!Array.isArray(value.routes) || value.routes.length === 0) {
+    return `${path}.routes must be a non-empty array`;
+  }
+  const routeKeys = new Set<string>();
+  const supportedAgents = new Set<ModelAgent>();
+  for (const [index, route] of value.routes.entries()) {
+    error = registryRouteError(route, `${path}.routes[${index}]`);
+    if (error) return error;
+    const typedRoute = route as {
+      providerId: string;
+      modelId: string;
+      agents: ModelAgent[];
+    };
+    const routeKey = `${typedRoute.providerId}\u0000${typedRoute.modelId}`;
+    if (routeKeys.has(routeKey)) return `${path}.routes[${index}] must be unique`;
+    routeKeys.add(routeKey);
+    for (const agent of typedRoute.agents) supportedAgents.add(agent);
+  }
+  if (value.perAgent !== undefined) {
+    if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
+    for (const [agent, override] of Object.entries(value.perAgent)) {
+      if (!isModelAgent(agent)) return `${path}.perAgent.${agent} is not a supported agent`;
+      if (!supportedAgents.has(agent)) {
+        return `${path}.perAgent.${agent} must be supported by at least one route`;
+      }
+      error = overrideError(override, `${path}.perAgent.${agent}`, efforts);
+      if (error) return error;
+    }
+  }
+  return null;
+}
+
+export function parseModelRegistry(value: unknown): ModelAccessParseResult<ModelRegistry> {
+  if (!isPlainObject(value)) return fail('modelRegistry must be an object');
+  if (value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION) {
+    return fail(`modelRegistry.schemaVersion must be ${MODEL_REGISTRY_SCHEMA_VERSION}`);
+  }
+  if (!isIsoTimestamp(value.updatedAt)) {
+    return fail('modelRegistry.updatedAt must be an ISO timestamp');
+  }
+  if (!Array.isArray(value.models)) return fail('modelRegistry.models must be an array');
+  const modelIds = new Set<string>();
+  for (const [index, model] of value.models.entries()) {
+    if (isPlainObject(model) && typeof model.id === 'string') {
+      if (modelIds.has(model.id)) {
+        return fail(`modelRegistry.models[${index}].id must be unique`);
+      }
+      modelIds.add(model.id);
+    }
+    const error = registryEntryError(model, `modelRegistry.models[${index}]`);
+    if (error) return fail(error);
+  }
+  return ok(value as unknown as ModelRegistry);
 }

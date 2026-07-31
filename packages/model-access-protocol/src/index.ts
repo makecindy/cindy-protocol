@@ -5,4 +5,4 @@
  */
 
 export * from './types.js';
-export { isModelCurrency, parseListModelsResponse } from './parse.js';
+export { isModelCurrency, parseListModelsResponse, parseModelRegistry } from './parse.js';

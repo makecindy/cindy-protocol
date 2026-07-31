@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
+  MODEL_REGISTRY_SCHEMA_VERSION,
   parseListModelsResponse,
+  parseModelRegistry,
   type ListModelsResponse,
+  type ModelRegistry,
 } from '../index.js';
 
 const VALID_RESPONSE: ListModelsResponse = {
@@ -28,6 +31,45 @@ const VALID_RESPONSE: ListModelsResponse = {
           range: [0, 200_000],
           inputCostPerToken: 0.000_001,
           outputCostPerToken: 0.000_002,
+        },
+      ],
+    },
+  ],
+};
+
+const VALID_REGISTRY: ModelRegistry = {
+  schemaVersion: MODEL_REGISTRY_SCHEMA_VERSION,
+  updatedAt: '2026-07-31T00:00:00.000Z',
+  models: [
+    {
+      id: 'example/model',
+      name: 'Example Model',
+      status: 'active',
+      contextWindow: 200_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
+      routes: [
+        {
+          providerId: 'example',
+          modelId: 'example-model',
+          agents: ['claude-code', 'codex'],
+          referencePrices: [
+            {
+              currency: 'USD',
+              variant: 'standard',
+              inputPerMtok: 1,
+              outputPerMtok: 5,
+              cacheReadPerMtok: 0.1,
+              minInputTokens: 0,
+              maxInputTokens: 200_000,
+              effectiveFrom: '2026-07-01',
+              source: {
+                kind: 'provider-official',
+                url: 'https://example.com/pricing',
+                verifiedAt: '2026-07-31',
+              },
+            },
+          ],
         },
       ],
     },
@@ -127,6 +169,130 @@ describe('model access catalog contract', () => {
         ],
       },
       'response.models[0].perAgent.codex',
+    );
+  });
+});
+
+function expectRegistryReject(value: unknown, path: string): void {
+  const result = parseModelRegistry(value);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('unreachable');
+  expect(result.error).toContain(path);
+}
+
+describe('public model registry contract', () => {
+  it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
+    const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
+    expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
+  });
+
+  it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
+    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 2 }, 'modelRegistry.schemaVersion');
+    expectRegistryReject(
+      { ...VALID_REGISTRY, models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]] },
+      'modelRegistry.models[1].id',
+    );
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...VALID_REGISTRY.models[0],
+            routes: [VALID_REGISTRY.models[0]!.routes[0], VALID_REGISTRY.models[0]!.routes[0]],
+          },
+        ],
+      },
+      'modelRegistry.models[0].routes[1]',
+    );
+  });
+
+  it('rejects malformed price bands and untraceable price sources', () => {
+    const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
+    const basePrice = baseRoute.referencePrices![0]!;
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...VALID_REGISTRY.models[0],
+            routes: [
+              {
+                ...baseRoute,
+                referencePrices: [
+                  { ...basePrice, minInputTokens: 200_000, maxInputTokens: 200_000 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      'maxInputTokens',
+    );
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...VALID_REGISTRY.models[0],
+            routes: [
+              {
+                ...baseRoute,
+                referencePrices: [
+                  {
+                    ...basePrice,
+                    source: { ...basePrice.source, url: 'http://example.com/pricing' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      'source.url',
+    );
+  });
+
+  it('allows scheduled prices and agent-specific metadata only on supported routes', () => {
+    const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
+    const basePrice = baseRoute.referencePrices![0]!;
+    expect(
+      parseModelRegistry({
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...VALID_REGISTRY.models[0],
+            perAgent: { codex: { contextWindow: 272_000 } },
+            routes: [
+              {
+                ...baseRoute,
+                referencePrices: [
+                  { ...basePrice, effectiveUntil: '2026-09-01' },
+                  {
+                    ...basePrice,
+                    inputPerMtok: 2,
+                    outputPerMtok: 10,
+                    effectiveFrom: '2026-09-01',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }).ok,
+    ).toBe(true);
+
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...VALID_REGISTRY.models[0],
+            routes: [{ ...baseRoute, agents: ['claude-code'] }],
+            perAgent: { codex: { contextWindow: 272_000 } },
+          },
+        ],
+      },
+      'perAgent.codex',
     );
   });
 });
