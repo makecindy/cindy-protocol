@@ -5,5 +5,13 @@
  */
 
 export * from './types.js';
-export { isModelCurrency, parseListModelsResponse, parseModelRegistry } from './parse.js';
+export {
+  isModelCurrency,
+  parseListModelsResponse,
+  parseListModelsResponseV2,
+  parseModelRegistry,
+  parseProviderReportedModel,
+  parseResolveRequest,
+  parseResolveResponse,
+} from './parse.js';
 export { modelRegistryCanonicalJson } from './modelRegistry.js';

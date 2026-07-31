@@ -33,6 +33,107 @@ Catalog 中可选的 `modelRegistry` 段。
 - `agents` 是模型支持的 runtime tab，当前允许 `claude-code` / `codex`。
 - 价格、展示元数据、token 上限和 per-agent 覆盖均为可选字段。
 
+## Schema version 2 草案
+
+v2 新增模型目录 resolve 契约，同时保持 v1 的所有导出和字段不变（append-only）。
+`MODEL_ACCESS_RESOLVE_SCHEMA_VERSION` 为 `2`，effort 词表为
+`minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra`，agent 词表为
+`claude-code` / `codex`。
+
+### Resolve request
+
+```json
+{
+  "schemaVersion": 2,
+  "entries": [
+    {
+      "providerId": "openrouter",
+      "agent": "codex",
+      "wireProtocol": "openai-responses",
+      "models": [
+        {
+          "id": "vendor-model-id",
+          "name": "Vendor display name",
+          "providerReported": {
+            "contextWindow": 200000,
+            "maxOutput": 8192,
+            "modalities": { "input": ["text"], "output": ["text"] },
+            "capabilities": { "reasoning": true },
+            "mode": "chat",
+            "type": "chat"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+`providerReported` 是上游事实提示，不是客户端目录元数据。未知模型必须照样进入
+request，服务端不能因为知识库没有匹配而过滤它。
+
+### Resolve response
+
+```json
+{
+  "schemaVersion": 2,
+  "knowledgeRevision": "models-dev-2026-07-31",
+  "entries": [
+    {
+      "providerId": "openrouter",
+      "agent": "codex",
+      "models": [
+        {
+          "id": "vendor-model-id",
+          "name": "Vendor display name",
+          "description": "…",
+          "family": "…",
+          "group": "gpt",
+          "category": "gpt",
+          "mode": "chat",
+          "sortOrder": 10,
+          "contextWindow": 200000,
+          "maxOutput": 8192,
+          "efforts": ["low", "medium", "high"],
+          "defaultEffort": "medium",
+          "effortDisplayNames": { "high": "High" },
+          "supportsFastMode": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "capabilities": { "reasoning": true, "toolCall": true },
+          "cost": { "input": 1, "output": 2 },
+          "releaseDate": "2026-07-31",
+          "status": "active",
+          "defaultEnabled": true,
+          "provenance": "knowledge-base"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`ResolvedModel` 的字段语义与客户端 `CatalogModel` 对齐。`id` 是 provider 上报的稳定
+模型 id，resolve 绝不改写它；`provenance`（可选）只能是 `provider`、`override`、
+`knowledge-base` 或 `default`。未知模型必须透传，并用保守默认补齐必需字段。
+
+### ListModels v2
+
+Cindy AI 的现有 `GET /api/model-access/models` 信封采用加性 v2 扩展：仍然是
+`{ models: [...] }`，现有字段永不改名、改语义或删除，另加 `schemaVersion: 2` 和
+`ResolvedModel` 的增量字段。`currency` 继续必填；已核实旧客户端不读取该字段，因此
+此要求对旧客户端安全。空数组表示确实没有模型，不能解释成“未知”或回退为上一份目录。
+
+### 契约不变量与消费失败语义
+
+1. 未知模型必须透传；服务端绝不改模型 id，alias 只用于服务端内部知识库匹配。
+2. 聊天模型的 `mode` 只能是 `chat` / `responses`，或省略；未知 mode 不得作为聊天
+   模型发送。
+3. 版本演进只允许 append-only。旧客户端红线是 `{models:[...]}` 信封以及现有字段的
+   名称和语义永不改删；空数组是“真无模型”。
+4. v2 parser 是严格逐字段校验器。消费方收到 `ok: false` 时必须拒收本次 payload，
+   保留上一份有效快照，**绝不能清空列表**。HTTP 请求失败也沿用该策略；只有解析成功且
+   明确为 `models: []` 时，才可把目录更新为空。
+
 ## 兼容与发布顺序
 
 v1 是该 HTTP 响应首次纳入共享协议。新增 `schemaVersion` 和 `currency` 对旧客户端是

@@ -200,3 +200,124 @@ export interface ListModelsResponse {
 }
 
 export type ModelAccessParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Schema version for the model-catalog resolve request/response contract. */
+export const MODEL_ACCESS_RESOLVE_SCHEMA_VERSION = 2 as const;
+
+export const MODEL_ACCESS_PROVENANCES = [
+  'provider',
+  'override',
+  'knowledge-base',
+  'default',
+] as const;
+export type ModelProvenance = (typeof MODEL_ACCESS_PROVENANCES)[number];
+
+/** Display and capability metadata for a resolved per-provider model offer. */
+export interface ResolvedModelCapabilities {
+  reasoning?: boolean;
+  toolCall?: boolean;
+  attachment?: boolean;
+  temperature?: boolean;
+  /** Additive capability keys may be introduced without changing the schema version. */
+  [key: string]: unknown;
+}
+
+export interface ResolvedModelModalities {
+  input: string[];
+  output: string[];
+}
+
+export interface ResolvedModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/**
+ * A model offer after provider facts and catalog knowledge have been resolved.
+ * The id is the provider-reported id and is never rewritten by resolve.
+ */
+export interface ResolvedModel {
+  id: string;
+  name: string;
+  description?: string;
+  family?: string;
+  group?: string;
+  category?: string;
+  mode?: string;
+  sortOrder?: number;
+  contextWindow: number;
+  maxOutput?: number;
+  efforts: ModelEffort[];
+  defaultEffort: ModelEffort | null;
+  effortDisplayNames?: Partial<Record<ModelEffort, string>>;
+  supportsFastMode?: boolean;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  cost?: ResolvedModelCost;
+  releaseDate?: string;
+  status?: 'active' | 'alpha' | 'deprecated';
+  defaultEnabled?: boolean;
+  provenance?: ModelProvenance;
+}
+
+export interface ResolveRequestModel {
+  id: string;
+  name?: string;
+  providerReported?: ProviderReportedModel;
+}
+
+export interface ProviderReportedModel {
+  contextWindow?: number;
+  maxOutput?: number;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  mode?: string;
+  type?: string;
+}
+
+export interface ResolveRequestEntry {
+  providerId: string;
+  agent: ModelAgent;
+  wireProtocol?: string;
+  models: ResolveRequestModel[];
+}
+
+export interface ResolveRequest {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  entries: ResolveRequestEntry[];
+}
+
+export interface ResolveResponseEntry {
+  providerId: string;
+  agent: ModelAgent;
+  models: ResolvedModel[];
+}
+
+export interface ResolveResponse {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  knowledgeRevision: string;
+  entries: ResolveResponseEntry[];
+}
+
+/** Additive v2 fields on the existing ListModels model entry. */
+export interface ListModelsResponseV2Model extends ModelCatalogEntry {
+  family?: string;
+  category?: string;
+  mode?: string;
+  maxOutput?: number;
+  effortDisplayNames?: Partial<Record<ModelEffort, string>>;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  cost?: ResolvedModelCost;
+  releaseDate?: string;
+  status?: 'active' | 'alpha' | 'deprecated';
+  provenance?: ModelProvenance;
+}
+
+/** Schema v2 keeps the v1 models envelope and fields, adding resolved metadata. */
+export interface ListModelsResponseV2 {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  models: ListModelsResponseV2Model[];
+}

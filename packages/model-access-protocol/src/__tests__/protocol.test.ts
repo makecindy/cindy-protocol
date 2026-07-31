@@ -3,13 +3,21 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
+  MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   modelRegistryCanonicalJson,
   parseListModelsResponse,
+  parseListModelsResponseV2,
   parseModelRegistry,
+  parseResolveRequest,
+  parseResolveResponse,
   type ListModelsResponse,
+  type ListModelsResponseV2,
   type ModelRegistry,
+  type ResolveRequest,
+  type ResolveResponse,
+  type ResolvedModel,
 } from '../index.js';
 
 const VALID_RESPONSE: ListModelsResponse = {
@@ -516,5 +524,117 @@ describe('public model registry contract', () => {
         'referencePrices[1] overlaps referencePrices[0]',
       );
     }
+  });
+});
+
+describe('model access schema v2', () => {
+  const resolvedModel: ResolvedModel = {
+    id: 'example-chat-model',
+    name: 'Example Chat Model',
+    contextWindow: 200_000,
+    efforts: ['low', 'medium', 'high'],
+    defaultEffort: 'medium',
+    category: 'gpt',
+    mode: 'chat',
+    modalities: { input: ['text'], output: ['text'] },
+    capabilities: { reasoning: true, toolCall: true },
+    provenance: 'provider',
+  };
+
+  it('parses resolve requests with provider-reported facts and unknown ids', () => {
+    const request: ResolveRequest = {
+      schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
+      entries: [
+        {
+          providerId: 'openrouter',
+          agent: 'codex',
+          wireProtocol: 'openai-responses',
+          models: [
+            {
+              id: 'unknown-vendor-model',
+              providerReported: {
+                contextWindow: 200_000,
+                maxOutput: 8_192,
+                modalities: { input: ['text'], output: ['text'] },
+                capabilities: { reasoning: true },
+                mode: 'chat',
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(parseResolveRequest(JSON.parse(JSON.stringify(request)))).toEqual({
+      ok: true,
+      value: request,
+    });
+  });
+
+  it('parses resolved responses and rejects malformed metadata without clearing snapshots', () => {
+    const response: ResolveResponse = {
+      schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
+      knowledgeRevision: 'models-dev-2026-07-31',
+      entries: [{ providerId: 'openrouter', agent: 'codex', models: [resolvedModel] }],
+    };
+    expect(parseResolveResponse(JSON.parse(JSON.stringify(response)))).toEqual({
+      ok: true,
+      value: response,
+    });
+    const result = parseResolveResponse({
+      ...response,
+      entries: [{ ...response.entries[0]!, models: [{ ...resolvedModel, contextWindow: 0 }] }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('contextWindow');
+  });
+
+  it('parses the additive ListModels v2 envelope, including an empty list', () => {
+    const response: ListModelsResponseV2 = {
+      schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
+      models: [
+        {
+          ...VALID_RESPONSE.models[0]!,
+          maxOutput: 8_192,
+          category: 'gpt',
+          mode: 'chat',
+          modalities: { input: ['text'], output: ['text'] },
+          capabilities: { reasoning: true },
+          provenance: 'knowledge-base',
+        },
+      ],
+    };
+    expect(parseListModelsResponseV2(JSON.parse(JSON.stringify(response)))).toEqual({
+      ok: true,
+      value: response,
+    });
+    expect(parseListModelsResponseV2({ schemaVersion: 2, models: [] })).toEqual({
+      ok: true,
+      value: { schemaVersion: 2, models: [] },
+    });
+  });
+
+  it('rejects unsupported agents, duplicate provider entries, and invalid provenance', () => {
+    const badAgent = {
+      schemaVersion: 2,
+      entries: [{ providerId: 'p', agent: 'other', models: [] }],
+    };
+    expect(parseResolveRequest(badAgent).ok).toBe(false);
+    const duplicateEntries = {
+      schemaVersion: 2,
+      knowledgeRevision: 'r1',
+      entries: [
+        { providerId: 'p', agent: 'codex', models: [resolvedModel] },
+        { providerId: 'p', agent: 'codex', models: [resolvedModel] },
+      ],
+    };
+    expect(parseResolveResponse(duplicateEntries).ok).toBe(false);
+    const badProvenance = {
+      schemaVersion: 2,
+      knowledgeRevision: 'r1',
+      entries: [
+        { providerId: 'p', agent: 'codex', models: [{ ...resolvedModel, provenance: 'other' }] },
+      ],
+    };
+    expect(parseResolveResponse(badProvenance).ok).toBe(false);
   });
 });

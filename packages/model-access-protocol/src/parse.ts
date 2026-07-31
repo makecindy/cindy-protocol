@@ -3,10 +3,13 @@ import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
+  MODEL_ACCESS_PROVENANCES,
+  MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
   MODEL_PRICE_VARIANTS,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
+  type ListModelsResponseV2,
   type ModelAccessParseResult,
   type ModelAgent,
   type ModelCurrency,
@@ -14,6 +17,9 @@ import {
   type ModelPriceVariant,
   type ModelRegistry,
   type ModelRegistryStatus,
+  type ProviderReportedModel,
+  type ResolveRequest,
+  type ResolveResponse,
 } from './types.js';
 
 type PlainObject = Record<string, unknown>;
@@ -361,6 +367,302 @@ function modelEntryError(value: unknown, path: string): string | null {
     }
   }
   return null;
+}
+
+function isModelProvenance(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    MODEL_ACCESS_PROVENANCES.includes(value as (typeof MODEL_ACCESS_PROVENANCES)[number])
+  );
+}
+
+function requiredStringError(value: unknown, path: string, max: number): string | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return `${path} must be a non-empty string`;
+  }
+  if (value.length > max) return `${path} must contain at most ${max} characters`;
+  return null;
+}
+
+function requiredPositiveIntegerError(value: unknown, path: string): string | null {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    return `${path} must be a positive integer`;
+  }
+  return null;
+}
+
+function stringArrayError(value: unknown, path: string): string | null {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    return `${path} must be an array of strings`;
+  }
+  return null;
+}
+
+function modalitiesError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  return (
+    stringArrayError(value.input, `${path}.input`) ??
+    stringArrayError(value.output, `${path}.output`)
+  );
+}
+
+function capabilitiesError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  for (const key of ['reasoning', 'toolCall', 'attachment', 'temperature']) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') {
+      return `${path}.${key} must be a boolean when present`;
+    }
+  }
+  return null;
+}
+
+function providerReportedError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
+  if (error) return error;
+  error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
+  if (error) return error;
+  if (value.modalities !== undefined) {
+    error = modalitiesError(value.modalities, `${path}.modalities`);
+    if (error) return error;
+  }
+  if (value.capabilities !== undefined) {
+    error = capabilitiesError(value.capabilities, `${path}.capabilities`);
+    if (error) return error;
+  }
+  for (const field of ['mode', 'type'] as const) {
+    error = optionalStringError(value[field], `${path}.${field}`, 128);
+    if (error) return error;
+  }
+  return null;
+}
+
+function resolvedModelError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = requiredStringError(value.id, `${path}.id`, 256);
+  if (error) return error;
+  error = requiredStringError(value.name, `${path}.name`, 256);
+  if (error) return error;
+  for (const [key, max] of [
+    ['description', 2_000],
+    ['family', 128],
+    ['group', 128],
+    ['category', 128],
+    ['mode', 128],
+    ['releaseDate', 64],
+  ] as const) {
+    error = optionalStringError(value[key], `${path}.${key}`, max);
+    if (error) return error;
+  }
+  error = requiredPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
+  if (error) return error;
+  error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
+  if (error) return error;
+  error = effortListError(value.efforts, `${path}.efforts`);
+  if (error) return error;
+  if (!Array.isArray(value.efforts)) return `${path}.efforts must be an array`;
+  if (value.defaultEffort !== null && !isModelEffort(value.defaultEffort)) {
+    return `${path}.defaultEffort must be a supported effort value or null`;
+  }
+  if (value.defaultEffort !== null && !value.efforts.includes(value.defaultEffort)) {
+    return `${path}.defaultEffort must be included in ${path}.efforts`;
+  }
+  if (value.effortDisplayNames !== undefined) {
+    if (!isPlainObject(value.effortDisplayNames))
+      return `${path}.effortDisplayNames must be an object`;
+    for (const [effort, label] of Object.entries(value.effortDisplayNames)) {
+      if (!isModelEffort(effort))
+        return `${path}.effortDisplayNames.${effort} is not a supported effort`;
+      error = requiredStringError(label, `${path}.effortDisplayNames.${effort}`, 256);
+      if (error) return error;
+    }
+  }
+  for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') {
+      return `${path}.${key} must be a boolean when present`;
+    }
+  }
+  if (value.modalities !== undefined) {
+    error = modalitiesError(value.modalities, `${path}.modalities`);
+    if (error) return error;
+  }
+  if (value.capabilities !== undefined) {
+    error = capabilitiesError(value.capabilities, `${path}.capabilities`);
+    if (error) return error;
+  }
+  if (value.cost !== undefined) {
+    if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+      error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
+        nonNegative: true,
+      });
+      if (error) return error;
+    }
+  }
+  if (
+    value.status !== undefined &&
+    !['active', 'alpha', 'deprecated'].includes(value.status as string)
+  ) {
+    return `${path}.status must be active, alpha, or deprecated when present`;
+  }
+  if (value.provenance !== undefined && !isModelProvenance(value.provenance)) {
+    return `${path}.provenance must be a supported provenance value when present`;
+  }
+  return null;
+}
+
+function resolveRequestModelError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  let error = requiredStringError(value.id, `${path}.id`, 256);
+  if (error) return error;
+  error = optionalStringError(value.name, `${path}.name`, 256);
+  if (error) return error;
+  if (value.providerReported !== undefined) {
+    error = providerReportedError(value.providerReported, `${path}.providerReported`);
+    if (error) return error;
+  }
+  return null;
+}
+
+function parseEntries(value: unknown, path: string, kind: 'request' | 'response'): string | null {
+  if (!Array.isArray(value)) return `${path} must be an array`;
+  const keys = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    const entryPath = `${path}[${index}]`;
+    if (!isPlainObject(entry)) return `${entryPath} must be an object`;
+    let error = requiredStringError(entry.providerId, `${entryPath}.providerId`, 128);
+    if (error) return error;
+    if (!isModelAgent(entry.agent)) return `${entryPath}.agent must be a supported agent`;
+    if (kind === 'request') {
+      error = optionalStringError(entry.wireProtocol, `${entryPath}.wireProtocol`, 128);
+      if (error) return error;
+    }
+    if (!Array.isArray(entry.models)) return `${entryPath}.models must be an array`;
+    const key = `${entry.providerId} ${entry.agent}`;
+    if (keys.has(key)) return `${entryPath} must be unique by providerId and agent`;
+    keys.add(key);
+    const modelIds = new Set<string>();
+    for (const [modelIndex, model] of entry.models.entries()) {
+      const modelPath = `${entryPath}.models[${modelIndex}]`;
+      error =
+        kind === 'request'
+          ? resolveRequestModelError(model, modelPath)
+          : resolvedModelError(model, modelPath);
+      if (error) return error;
+      const id = (model as PlainObject).id as string;
+      if (modelIds.has(id)) return `${modelPath}.id must be unique`;
+      modelIds.add(id);
+    }
+  }
+  return null;
+}
+
+/** Strictly parse a v2 resolve request. Invalid responses must not replace a cached snapshot. */
+export function parseResolveRequest(value: unknown): ModelAccessParseResult<ResolveRequest> {
+  if (!isPlainObject(value)) return fail('request must be an object');
+  if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
+    return fail(`request.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
+  }
+  const error = parseEntries(value.entries, 'request.entries', 'request');
+  return error ? fail(error) : ok(value as unknown as ResolveRequest);
+}
+
+/** Strictly parse a v2 resolve response. Invalid responses must not replace a cached snapshot. */
+export function parseResolveResponse(value: unknown): ModelAccessParseResult<ResolveResponse> {
+  if (!isPlainObject(value)) return fail('response must be an object');
+  if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
+    return fail(`response.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
+  }
+  const revisionError = requiredStringError(
+    value.knowledgeRevision,
+    'response.knowledgeRevision',
+    256,
+  );
+  if (revisionError) return fail(revisionError);
+  const error = parseEntries(value.entries, 'response.entries', 'response');
+  return error ? fail(error) : ok(value as unknown as ResolveResponse);
+}
+
+function v2ModelIncrementalError(value: unknown, path: string): string | null {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  let error: string | null = null;
+  for (const [key, max] of [
+    ['family', 128],
+    ['category', 128],
+    ['mode', 128],
+    ['releaseDate', 64],
+  ] as const) {
+    error = optionalStringError(value[key], `${path}.${key}`, max);
+    if (error) return error;
+  }
+  error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
+  if (error) return error;
+  if (value.effortDisplayNames !== undefined) {
+    if (!isPlainObject(value.effortDisplayNames))
+      return `${path}.effortDisplayNames must be an object`;
+    for (const [effort, label] of Object.entries(value.effortDisplayNames)) {
+      if (!isModelEffort(effort))
+        return `${path}.effortDisplayNames.${effort} is not a supported effort`;
+      error = optionalStringError(label, `${path}.effortDisplayNames.${effort}`, 256);
+      if (error) return error;
+    }
+  }
+  if (value.modalities !== undefined) {
+    error = modalitiesError(value.modalities, `${path}.modalities`);
+    if (error) return error;
+  }
+  if (value.capabilities !== undefined) {
+    error = capabilitiesError(value.capabilities, `${path}.capabilities`);
+    if (error) return error;
+  }
+  if (value.cost !== undefined) {
+    if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+      error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
+        nonNegative: true,
+      });
+      if (error) return error;
+    }
+  }
+  if (
+    value.status !== undefined &&
+    !['active', 'alpha', 'deprecated'].includes(value.status as string)
+  ) {
+    return `${path}.status must be active, alpha, or deprecated when present`;
+  }
+  if (value.provenance !== undefined && !isModelProvenance(value.provenance)) {
+    return `${path}.provenance must be a supported provenance value when present`;
+  }
+  return null;
+}
+
+/** Strictly parse the additive v2 ListModels response envelope. */
+export function parseListModelsResponseV2(
+  value: unknown,
+): ModelAccessParseResult<ListModelsResponseV2> {
+  if (!isPlainObject(value)) return fail('response must be an object');
+  if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
+    return fail(`response.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
+  }
+  if (!Array.isArray(value.models)) return fail('response.models must be an array');
+  const modelIds = new Set<string>();
+  for (const [index, model] of value.models.entries()) {
+    const path = `response.models[${index}]`;
+    const error = modelEntryError(model, path) ?? v2ModelIncrementalError(model, path);
+    if (error) return fail(error);
+    if (isPlainObject(model) && typeof model.id === 'string') {
+      if (modelIds.has(model.id)) return fail(`${path}.id must be unique`);
+      modelIds.add(model.id);
+    }
+  }
+  return ok(value as unknown as ListModelsResponseV2);
+}
+
+export function parseProviderReportedModel(
+  value: unknown,
+): ModelAccessParseResult<ProviderReportedModel> {
+  const error = providerReportedError(value, 'providerReported');
+  return error ? fail(error) : ok(value as ProviderReportedModel);
 }
 
 export function parseListModelsResponse(
