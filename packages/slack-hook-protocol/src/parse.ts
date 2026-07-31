@@ -99,17 +99,21 @@ function validateProviderBehaviorProvider(v: unknown, path: string): string | nu
   return null;
 }
 
-/** Telegram chat ids are decimal integers (negative for supergroups/channels). */
+/** Telegram group/channel ids are canonical negative integers within Bot API's 52-bit range. */
 const TELEGRAM_CHAT_ID_MAX_CHARS = 32;
-const TELEGRAM_CHAT_ID_PATTERN = /^-?[0-9]+$/;
+const TELEGRAM_GROUP_CHAT_ID_PATTERN = /^-[1-9][0-9]*$/;
+const TELEGRAM_CHAT_ID_MIN = -((1n << 52n) - 1n);
 
-function isTelegramChatId(v: unknown): v is string {
-  return (
-    typeof v === 'string' &&
-    v.length > 0 &&
-    v.length <= TELEGRAM_CHAT_ID_MAX_CHARS &&
-    TELEGRAM_CHAT_ID_PATTERN.test(v)
-  );
+function isTelegramGroupChatId(v: unknown): v is string {
+  if (
+    typeof v !== 'string' ||
+    v.length === 0 ||
+    v.length > TELEGRAM_CHAT_ID_MAX_CHARS ||
+    !TELEGRAM_GROUP_CHAT_ID_PATTERN.test(v)
+  ) {
+    return false;
+  }
+  return BigInt(v) >= TELEGRAM_CHAT_ID_MIN;
 }
 
 /**
@@ -962,8 +966,8 @@ function validateGroupActivationPatch(v: unknown): string | null {
   if (!isPlainObject(v)) {
     return 'provider.behavior.set.groupActivation must be an object when present';
   }
-  if (!isTelegramChatId(v.chatId)) {
-    return `provider.behavior.set.groupActivation.chatId must be a Telegram chat id string of at most ${TELEGRAM_CHAT_ID_MAX_CHARS} chars`;
+  if (!isTelegramGroupChatId(v.chatId)) {
+    return 'provider.behavior.set.groupActivation.chatId must be a canonical negative Telegram group chat id within the 52-bit Bot API range';
   }
   if (v.value !== null && v.value !== TELEGRAM_GROUP_ACTIVATION_ALWAYS) {
     return `provider.behavior.set.groupActivation.value must be '${TELEGRAM_GROUP_ACTIVATION_ALWAYS}' or null`;
@@ -1036,10 +1040,17 @@ function validateProviderBehaviorState(p: Record<string, unknown>): string | nul
   if (!isPlainObject(p.groupActivation)) {
     return 'provider.behavior.state.groupActivation must be an object';
   }
-  const entries = Object.entries(p.groupActivation);
-  for (const [chatId, value] of entries) {
-    if (!isTelegramChatId(chatId)) {
-      return `provider.behavior.state.groupActivation key must be a Telegram chat id string of at most ${TELEGRAM_CHAT_ID_MAX_CHARS} chars`;
+  let hasGroupActivation = false;
+  // Do not use Object.entries/Object.keys here: a valid state may contain a
+  // large accumulated map, and materializing a second tuple/key array can
+  // roughly double peak memory after JSON.parse. The frame-size guard remains
+  // the cardinality bound; this pass adds only constant memory.
+  for (const chatId in p.groupActivation) {
+    if (!Object.prototype.hasOwnProperty.call(p.groupActivation, chatId)) continue;
+    hasGroupActivation = true;
+    const value = p.groupActivation[chatId];
+    if (!isTelegramGroupChatId(chatId)) {
+      return 'provider.behavior.state.groupActivation key must be a canonical negative Telegram group chat id within the 52-bit Bot API range';
     }
     if (value !== TELEGRAM_GROUP_ACTIVATION_ALWAYS) {
       return `provider.behavior.state.groupActivation[${chatId}] must be '${TELEGRAM_GROUP_ACTIVATION_ALWAYS}'`;
@@ -1055,7 +1066,7 @@ function validateProviderBehaviorState(p: Record<string, unknown>): string | nul
     ) {
       return 'provider.behavior.state must report the default behavior when bound is false';
     }
-    if (entries.length > 0) {
+    if (hasGroupActivation) {
       return 'provider.behavior.state.groupActivation must be empty when bound is false';
     }
   }

@@ -250,6 +250,18 @@ describe('provider.behavior(阶段 19)', () => {
       },
       'provider.behavior.set.groupActivation.chatId',
     );
+    for (const chatId of ['0', '123', '-0', '-001', '-4503599627370496']) {
+      expectReject(
+        {
+          ...set,
+          payload: {
+            ...SET_GROUP_ACTIVATION_ONLY,
+            groupActivation: { chatId, value: TELEGRAM_GROUP_ACTIVATION_ALWAYS },
+          },
+        },
+        'provider.behavior.set.groupActivation.chatId',
+      );
+    }
     expectReject(
       {
         ...set,
@@ -343,7 +355,17 @@ describe('provider.behavior(阶段 19)', () => {
           groupActivation: { 'not-a-chat-id': TELEGRAM_GROUP_ACTIVATION_ALWAYS },
         },
       },
-      'provider.behavior.state.groupActivation key must be a Telegram chat id',
+      'provider.behavior.state.groupActivation key must be a canonical negative Telegram group chat id',
+    );
+    expectReject(
+      {
+        ...state,
+        payload: {
+          ...STATE_BOUND_NON_DEFAULT,
+          groupActivation: { '001': TELEGRAM_GROUP_ACTIVATION_ALWAYS },
+        },
+      },
+      'provider.behavior.state.groupActivation key must be a canonical negative Telegram group chat id',
     );
     expectReject(
       {
