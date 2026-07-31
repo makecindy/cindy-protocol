@@ -99,7 +99,7 @@ export interface ModelRegistryEntry {
  */
 export interface ModelRegistry {
   schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
-  /** ISO timestamp for the immutable registry snapshot. */
+  /** Canonical UTC ISO timestamp (`Date#toISOString`) for the immutable registry snapshot. */
   updatedAt: string;
   models: ModelRegistryEntry[];
 }

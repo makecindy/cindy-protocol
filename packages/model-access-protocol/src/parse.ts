@@ -148,7 +148,26 @@ function isIsoDate(value: unknown): value is string {
 }
 
 function isIsoTimestamp(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function referencePriceRangesOverlap(a: PlainObject, b: PlainObject): boolean {
+  if (a.currency !== b.currency || a.variant !== b.variant) return false;
+  const aMin = typeof a.minInputTokens === 'number' ? a.minInputTokens : 0;
+  const bMin = typeof b.minInputTokens === 'number' ? b.minInputTokens : 0;
+  const aMax = typeof a.maxInputTokens === 'number' ? a.maxInputTokens : Number.POSITIVE_INFINITY;
+  const bMax = typeof b.maxInputTokens === 'number' ? b.maxInputTokens : Number.POSITIVE_INFINITY;
+  const tokenRangesOverlap = aMin < bMax && bMin < aMax;
+  const aUntil = typeof a.effectiveUntil === 'string' ? a.effectiveUntil : null;
+  const bUntil = typeof b.effectiveUntil === 'string' ? b.effectiveUntil : null;
+  const dateRangesOverlap =
+    (bUntil === null || String(a.effectiveFrom) < bUntil) &&
+    (aUntil === null || String(b.effectiveFrom) < aUntil);
+  return tokenRangesOverlap && dateRangesOverlap;
 }
 
 function isSafeSlug(value: unknown): value is string {
@@ -454,6 +473,16 @@ function registryRouteError(value: unknown, path: string): string | null {
     for (const [index, price] of value.referencePrices.entries()) {
       error = referencePriceError(price, `${path}.referencePrices[${index}]`);
       if (error) return error;
+      for (let previousIndex = 0; previousIndex < index; previousIndex += 1) {
+        const previous = value.referencePrices[previousIndex];
+        if (
+          isPlainObject(price) &&
+          isPlainObject(previous) &&
+          referencePriceRangesOverlap(previous, price)
+        ) {
+          return `${path}.referencePrices[${index}] overlaps referencePrices[${previousIndex}] for the same currency and variant`;
+        }
+      }
     }
   }
   return null;

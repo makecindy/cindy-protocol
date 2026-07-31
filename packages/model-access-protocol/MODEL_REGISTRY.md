@@ -14,6 +14,12 @@ accounts:
   levels, and Fast support;
 - public provider reference prices with effective dates and traceable sources.
 
+`updatedAt` is a canonical UTC ISO timestamp in `Date#toISOString()` form.
+For one route, reference-price entries with the same currency and variant must
+not overlap in both their effective-date interval and input-token interval.
+Both interval upper bounds are exclusive, so adjacent schedules and bands are
+valid while ambiguous array-order precedence is rejected.
+
 It must not contain client runtime provenance, account state, or user
 preferences. In particular, fields such as `contextWindowExplicit`,
 `contextWindowVerified`, discovery timestamps, local override markers, live

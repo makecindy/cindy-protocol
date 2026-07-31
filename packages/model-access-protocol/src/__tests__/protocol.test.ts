@@ -282,6 +282,18 @@ describe('public model registry contract', () => {
     );
   });
 
+  it('requires a canonical, calendar-valid UTC timestamp', () => {
+    for (const updatedAt of [
+      '2026-07-31',
+      'July 31, 2026',
+      '2026-07-31T00:00:00Z',
+      '2026-02-29T00:00:00.000Z',
+      '2026-07-31T08:00:00.000+08:00',
+    ]) {
+      expectRegistryReject({ ...VALID_REGISTRY, updatedAt }, 'modelRegistry.updatedAt');
+    }
+  });
+
   it('rejects malformed price bands and untraceable price sources', () => {
     const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
     const basePrice = baseRoute.referencePrices![0]!;
@@ -370,5 +382,37 @@ describe('public model registry contract', () => {
       },
       'perAgent.codex',
     );
+  });
+
+  it('rejects ambiguous overlapping reference prices for the same currency and variant', () => {
+    const baseRoute = VALID_REGISTRY.models[0]!.routes[0]!;
+    const basePrice = baseRoute.referencePrices![0]!;
+    for (const overlappingPrice of [
+      { ...basePrice },
+      { ...basePrice, minInputTokens: 100_000, maxInputTokens: 300_000 },
+      {
+        ...basePrice,
+        effectiveFrom: '2026-07-15',
+        effectiveUntil: '2026-08-01',
+      },
+    ]) {
+      expectRegistryReject(
+        {
+          ...VALID_REGISTRY,
+          models: [
+            {
+              ...VALID_REGISTRY.models[0],
+              routes: [
+                {
+                  ...baseRoute,
+                  referencePrices: [basePrice, overlappingPrice],
+                },
+              ],
+            },
+          ],
+        },
+        'referencePrices[1] overlaps referencePrices[0]',
+      );
+    }
   });
 });
