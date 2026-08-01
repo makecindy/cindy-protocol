@@ -1,0 +1,4 @@
+# Unified public model registry wire contract and its architecture boundary.
+# Changes here require explicit registry-owner review.
+/.github/CODEOWNERS @zqchris
+/packages/model-access-protocol/ @zqchris

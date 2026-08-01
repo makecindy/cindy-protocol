@@ -21,6 +21,89 @@ export const MODEL_ACCESS_EFFORTS = [
 ] as const;
 export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 
+/** Version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_SCHEMA_VERSION = 1 as const;
+
+export const MODEL_REGISTRY_STATUSES = ['preview', 'active', 'deprecated', 'retired'] as const;
+export type ModelRegistryStatus = (typeof MODEL_REGISTRY_STATUSES)[number];
+
+export const MODEL_PRICE_VARIANTS = ['standard', 'priority', 'batch', 'fast'] as const;
+export type ModelPriceVariant = (typeof MODEL_PRICE_VARIANTS)[number];
+
+export interface ModelReferencePriceSource {
+  kind: 'provider-official';
+  /** Public HTTPS page supporting the price. */
+  url: string;
+  /** ISO calendar date on which Cindy last verified the source. */
+  verifiedAt: string;
+}
+
+/**
+ * A time- and input-band-specific public reference price.
+ *
+ * Prices are deliberately normalized to one million tokens. They are estimates,
+ * not Cindy AI / XD Gateway sale prices and not an account's actual provider bill.
+ */
+export interface ModelReferencePrice {
+  currency: ModelCurrency;
+  variant: ModelPriceVariant;
+  inputPerMtok: number;
+  outputPerMtok: number;
+  cacheReadPerMtok?: number;
+  /** Default prompt-cache write tier (normally the provider's 5-minute tier). */
+  cacheWritePerMtok?: number;
+  cacheWrite1hPerMtok?: number;
+  /** Inclusive lower bound. Omitted means zero. */
+  minInputTokens?: number;
+  /** Exclusive upper bound. Omitted means unbounded. */
+  maxInputTokens?: number;
+  /** Inclusive ISO calendar date. */
+  effectiveFrom: string;
+  /** Exclusive ISO calendar date. */
+  effectiveUntil?: string;
+  source: ModelReferencePriceSource;
+}
+
+/**
+ * Maps a canonical model to the exact id accepted by one provider route.
+ * A dynamic provider model list remains authoritative for actual availability.
+ */
+export interface ModelRegistryRoute {
+  providerId: string;
+  modelId: string;
+  agents: ModelAgent[];
+  referencePrices?: ModelReferencePrice[];
+}
+
+export interface ModelRegistryEntry {
+  /** Stable provider-independent Cindy id, for example `openai/gpt-5.6-terra`. */
+  id: string;
+  name: string;
+  routes: ModelRegistryRoute[];
+  status?: ModelRegistryStatus;
+  group?: string;
+  description?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  efforts?: ModelEffort[];
+  defaultEffort?: ModelEffort;
+  sortOrder?: number;
+  supportsFastMode?: boolean;
+  defaultEnabled?: boolean;
+  perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
+}
+
+/**
+ * Public provider-independent metadata and reference-price registry.
+ * This object is embedded as `Catalog.modelRegistry` in the public catalog JSON.
+ */
+export interface ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
+  /** Canonical UTC ISO timestamp (`Date#toISOString`) for the immutable registry snapshot. */
+  updatedAt: string;
+  models: ModelRegistryEntry[];
+}
+
 export interface ModelTieredPricing {
   range: [number, number];
   inputCostPerToken?: number;
