@@ -41,6 +41,9 @@ import {
   type HookProviderBindUpdateMessage,
   type GroupMessagePayload,
   type HookGroupMessageMessage,
+  type HookProviderBehaviorGetMessage,
+  type HookProviderBehaviorSetMessage,
+  type HookProviderBehaviorStateMessage,
   type HookProviderPrefsGetMessage,
   type HookProviderPrefsSetMessage,
   type HookProviderPrefsStateMessage,
@@ -63,6 +66,9 @@ import {
   type PrefsGetPayload,
   type PrefsSetPayload,
   type PrefsStatePayload,
+  type ProviderBehaviorGetPayload,
+  type ProviderBehaviorSetPayload,
+  type ProviderBehaviorStatePayload,
   type ProviderBindCancelPayload,
   type ProviderBindRevokePayload,
   type ProviderBindStartPayload,
@@ -274,6 +280,24 @@ export function makeProviderPrefsState(
   payload: ProviderPrefsStatePayload,
 ): HookProviderPrefsStateMessage {
   return envelope('provider.prefs.state', payload);
+}
+
+export function makeProviderBehaviorGet(
+  payload: ProviderBehaviorGetPayload,
+): HookProviderBehaviorGetMessage {
+  return envelope('provider.behavior.get', payload);
+}
+
+export function makeProviderBehaviorSet(
+  payload: ProviderBehaviorSetPayload,
+): HookProviderBehaviorSetMessage {
+  return envelope('provider.behavior.set', payload);
+}
+
+export function makeProviderBehaviorState(
+  payload: ProviderBehaviorStatePayload,
+): HookProviderBehaviorStateMessage {
+  return envelope('provider.behavior.state', payload);
 }
 
 export function makeToolRequest(payload: ToolRequestPayload): HookToolRequestMessage {

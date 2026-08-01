@@ -102,11 +102,31 @@
  *      只有声明 HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT 后 desktop 才发送
  *      即时更新帧;旧 server 忽略 hello 新字段,保持既有通知行为。
  *
+ *   19. Telegram 行为配置: provider.behavior.get / provider.behavior.set
+ *      (desktop -> server) / provider.behavior.state(server -> desktop) ——
+ *      当前仅 provider='telegram'。选择器**只认 bindingId**(不是
+ *      provider.prefs.* 的 bindingId/scopeId 二选一): 行为配置(emoji 回应 /
+ *      回复引用 / 群免 @ 白名单)在绑定成立前没有意义, 收窄为单选择器把
+ *      "谁能读写它"的边界钉死在已确认的绑定上。set 的三个全局字段与
+ *      groupActivation 共用同一套 patch 三态: 缺省(undefined)=不动、
+ *      显式枚举值 = 写入 override(哪怕这个值刚好等于当前版本默认值也照写
+ *      不落空 —— 用户的显式选择不能因为协议以后调整默认值而被悄悄改写)、
+ *      显式 null = 清除 override、回落到当时版本的默认值。二者可同帧组合,
+ *      但至少要有一项实际改动(null 也算一次真实改动)—— 空 patch 直接拒收
+ *      (不同于 prefs.set, 这里没有"无副作用地静默 no-op"的容错空间)。
+ *      state 携带的**始终是已解析的非空有效值**(不是原始 patch, 不会是
+ *      null), 且 groupActivation 只列出偏离默认值('mention')的 chatId;
+ *      bound=false 时 parse 强制整帧收敛为默认行为 + 空白名单(未绑定没有
+ *      主体持有 per-chat 覆盖)。三个全局字段的默认值(DEFAULT_TELEGRAM_
+ *      BEHAVIOR)与个人版桌面客户端出厂行为对齐: emojiReactions='minimal'、
+ *      replyQuoteDm='off'、replyQuoteGroup='first'。见 Provider-neutral
+ *      behavior 小节。
+ *
  *   编号说明: 本文件头的条目号与 docs/slack-hook-protocol.md §1 的消息目录
  *      对齐(那份是正本)。中间的跳号是因为部分帧只在下方各自的类型旁说明 ——
  *      14 多 provider(provider.bind.* / provider.prefs.*, 见 Provider-neutral
  *      小节)、15 最近会话(QUERY_KINDS)、16 群消息中继(GroupMessagePayload)、
- *      17 上下线通知偏好(LifecyclePreferencePayload, 即上面那条)。
+ *      17 上下线通知偏好(LifecyclePreferencePayload, 即上面那条)、19 见上。
  *
  *   18. 续跑: turn.reopen(desktop -> server) —— 一个已经以 turn.end 收口的
  *      任务, 在桌面端被用户续跑了, 把后续进展重新接回渠道里那条消息。
@@ -222,6 +242,9 @@ export const HOOK_MESSAGE_TYPES = [
   'bind.state',
   'group.message',
   'lifecycle.preference',
+  'provider.behavior.get',
+  'provider.behavior.set',
+  'provider.behavior.state',
 ] as const;
 
 export type HookMessageType = (typeof HOOK_MESSAGE_TYPES)[number];
@@ -1032,6 +1055,147 @@ export interface ProviderPrefsStatePayload extends ProviderPrefsSelector {
   prefs: ProviderWorkspacePrefsEntry[];
 }
 
+// ── Provider-neutral behavior (Telegram, append-only v1) ───────────────────
+// 见文件头第 19 条。
+
+/**
+ * Providers this frame family currently understands. Deliberately its own
+ * append-only list rather than reusing HookProvider: the field shapes below
+ * (emoji reactions, reply-quote depth, a chat-id-keyed mention allowlist) are
+ * Telegram-specific, not provider-neutral placeholders — adding Slack or X
+ * here later requires a deliberate look at whether these exact fields still
+ * make sense for that provider, not just a permissive type-level allowance.
+ */
+export const PROVIDER_BEHAVIOR_PROVIDERS = Object.freeze(['telegram'] as const);
+export type ProviderBehaviorProvider = (typeof PROVIDER_BEHAVIOR_PROVIDERS)[number];
+
+/** Emoji reaction verbosity on Telegram messages the bot sees/sends. */
+export const TELEGRAM_EMOJI_REACTIONS = Object.freeze(['off', 'minimal', 'expressive'] as const);
+export type TelegramEmojiReactions = (typeof TELEGRAM_EMOJI_REACTIONS)[number];
+
+/** Whether a DM reply quotes the message it answers. */
+export const TELEGRAM_REPLY_QUOTE_DM = Object.freeze(['off', 'first'] as const);
+export type TelegramReplyQuoteDm = (typeof TELEGRAM_REPLY_QUOTE_DM)[number];
+
+/** Whether a group reply quotes the message(s) it answers. */
+export const TELEGRAM_REPLY_QUOTE_GROUP = Object.freeze(['off', 'first', 'all'] as const);
+export type TelegramReplyQuoteGroup = (typeof TELEGRAM_REPLY_QUOTE_GROUP)[number];
+
+/**
+ * The only per-chat activation override this protocol carries: the bot
+ * responds in that chat without requiring an @mention. The default behavior
+ * ('mention' required) is expressed by the chat's *absence* from the map —
+ * there is no 'mention' literal to write, only this one to set or clear.
+ */
+export const TELEGRAM_GROUP_ACTIVATION_ALWAYS = 'always';
+export type TelegramGroupActivationOverride = typeof TELEGRAM_GROUP_ACTIVATION_ALWAYS;
+
+/** The three global Telegram behavior switches, always present together. */
+export interface TelegramBehaviorFields {
+  emojiReactions: TelegramEmojiReactions;
+  replyQuoteDm: TelegramReplyQuoteDm;
+  replyQuoteGroup: TelegramReplyQuoteGroup;
+}
+
+/**
+ * Baseline behavior for a binding that has never been configured, and the
+ * value provider.behavior.state must report while bound=false (parse
+ * enforced — see ProviderBehaviorStatePayload). Matches the personal-build
+ * defaults (the shipped Telegram bot behavior before any override): emoji
+ * reactions default to 'minimal', DM reply-quoting defaults off, and group
+ * reply-quoting defaults to quoting the first message of a burst.
+ */
+export const DEFAULT_TELEGRAM_BEHAVIOR: Readonly<TelegramBehaviorFields> = Object.freeze({
+  emojiReactions: 'minimal',
+  replyQuoteDm: 'off',
+  replyQuoteGroup: 'first',
+});
+
+/**
+ * Selector for provider.behavior.* frames. Deliberately narrower than
+ * ProviderPrefsSelector (which allows a scope-only selector before a binding
+ * exists): every field here — the global switches and the per-chat allowlist
+ * — is meaningless without a concrete bound principal (the allowlist's keys
+ * are chats *that principal's bot* has seen), so there is nothing to
+ * configure pre-binding. Requiring bindingId (not bindingId | scopeId) keeps
+ * the owner boundary explicit: whoever holds the bindingId is the only party
+ * allowed to read or write it.
+ */
+export interface ProviderBehaviorSelector {
+  provider: ProviderBehaviorProvider;
+  bindingId: string;
+}
+
+export interface ProviderBehaviorGetPayload extends ProviderBehaviorSelector {
+  requestId: string;
+}
+
+/**
+ * A single chat's activation-allowlist patch. `value: 'always'` adds the
+ * override; `value: null` clears a previously-set override, falling back to
+ * the default (mention required). Only one chat per set frame — batching is
+ * just repeated set calls, which keeps each mutation independently
+ * observable via the resulting provider.behavior.state.
+ */
+export interface ProviderBehaviorGroupActivationPatch {
+  chatId: string;
+  value: TelegramGroupActivationOverride | null;
+}
+
+/**
+ * provider.behavior.set(desktop -> server): patch one bound Telegram
+ * principal's behavior. Two independent, freely combinable patch axes:
+ *   - the three global fields, each optional and each `enum | null`:
+ *       - undefined = untouched (field omitted from the frame entirely);
+ *       - an enum literal = set an **explicit override** to that value —
+ *         written and persisted even when it happens to equal the current
+ *         version default. This matters: a user who explicitly chose
+ *         'minimal' must keep seeing 'minimal' even if a later protocol
+ *         revision changes DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions to
+ *         something else. Explicit intent must survive a default-value
+ *         change; only the user (or a future explicit clear) may remove it;
+ *       - `null` = **clear** the override, falling back to whatever
+ *         DEFAULT_TELEGRAM_BEHAVIOR carries for that field at resolve time.
+ *     This is the same three-way shape as ProviderBehaviorGroupActivationPatch
+ *     below (undefined/value/null), just applied to enum fields instead of
+ *     a chat-id map entry.
+ *   - groupActivation: one chat's allowlist patch or clear (see above).
+ * parse rejects a frame with neither axis present — unlike prefs.set, a
+ * silent no-op here would give the user no observable feedback that nothing
+ * changed, so intent must be explicit. Note `null` on a global field still
+ * counts as "an actual patch" for that at-least-one-patch requirement: it
+ * is a real, observable clear action, not an omission.
+ */
+export interface ProviderBehaviorSetPayload extends ProviderBehaviorSelector {
+  requestId: string;
+  emojiReactions?: TelegramEmojiReactions | null;
+  replyQuoteDm?: TelegramReplyQuoteDm | null;
+  replyQuoteGroup?: TelegramReplyQuoteGroup | null;
+  groupActivation?: ProviderBehaviorGroupActivationPatch;
+}
+
+/**
+ * provider.behavior.state(server -> desktop): full effective snapshot for one
+ * bound Telegram principal — reply to get/set (replyTo echoes requestId) or
+ * an unsolicited push after some other client mutates it (replyTo null).
+ * The three behavior fields are the *resolved* values (never a raw patch).
+ * groupActivation lists only chats that deviate from the default — chats the
+ * user never touched are implicitly 'mention' and are not enumerated. The
+ * enclosing frame remains bounded by HOOK_MAX_FRAME_CHARS; the map itself has
+ * no lower entry cap because every valid set mutation must remain representable
+ * in a later authoritative state snapshot.
+ * Field linkage (parse enforced): bound=false collapses the whole snapshot to
+ * DEFAULT_TELEGRAM_BEHAVIOR and an empty groupActivation — there is no
+ * principal to hold per-chat overrides for an unbound selector, so a stale
+ * configured value cannot survive past the binding that set it.
+ */
+export interface ProviderBehaviorStatePayload
+  extends ProviderBehaviorSelector, TelegramBehaviorFields {
+  replyTo: string | null;
+  bound: boolean;
+  groupActivation: Record<string, TelegramGroupActivationOverride>;
+}
+
 // ── 阶段 12(v2): Slack 网关工具 ────────────────────────────────────────────
 
 /**
@@ -1053,6 +1217,9 @@ export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';
+
+/** Both peers must advertise this before using provider.behavior.* frames. */
+export const HOOK_FEATURE_PROVIDER_BEHAVIOR = 'provider-behavior-v1';
 
 /** Both peers must advertise this before query.kind=sessions is used. */
 export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
@@ -1149,11 +1316,27 @@ export interface ToolResponsePayload {
  */
 export const HOOK_FEATURE_GROUP_RELAY = 'group-relay-v1';
 
-/** group.message 的发送者标识(display name, 不携带平台 user id)。 */
+/**
+ * group.message 的发送者标识(display name 为主)。
+ * id / username 均可选(旧生产端不发时省略, 向后兼容): 新生产端(阶段 19
+ * 起, provider.behavior 需要按发送者匹配群白名单以外的场景)可附带平台
+ * user id 与 @handle。二者按 Telegram 当前实际契约收紧校验(group.message
+ * 本身仍是开放 provider 集合, 但这两个新字段目前只有 Telegram 生产端会填,
+ * 形状即按 Telegram 定义; 未来若有其它 provider 要填这两个字段且形状不同,
+ * 需要重新评估这里的校验, 而不是放宽成万能字符串):
+ *   - id: Telegram 数字 user id 的规范十进制正整数字符串(无前导零,在 Bot API
+ *     52-bit 范围内), 见 GROUP_MESSAGE_AUTHOR_ID_PATTERN;
+ *   - username: Telegram @handle, 仅 [A-Za-z0-9_]，1~32 位, 见
+ *     GROUP_MESSAGE_AUTHOR_USERNAME_PATTERN。
+ */
 export interface GroupMessageAuthor {
   name: string;
   /** 是否为 bot(含 Cindy 自身出站回复的回流条目)。 */
   isBot?: boolean;
+  /** Telegram 数字 user id 的规范十进制正整数字符串(52-bit 范围内); 拿不到时省略。 */
+  id?: string;
+  /** Telegram @handle(不含 @ 前缀, [A-Za-z0-9_]{1,32}); 拿不到时省略。 */
+  username?: string;
 }
 
 /**
@@ -1254,6 +1437,18 @@ export type HookLifecyclePreferenceMessage = HookEnvelope<
   'lifecycle.preference',
   LifecyclePreferencePayload
 >;
+export type HookProviderBehaviorGetMessage = HookEnvelope<
+  'provider.behavior.get',
+  ProviderBehaviorGetPayload
+>;
+export type HookProviderBehaviorSetMessage = HookEnvelope<
+  'provider.behavior.set',
+  ProviderBehaviorSetPayload
+>;
+export type HookProviderBehaviorStateMessage = HookEnvelope<
+  'provider.behavior.state',
+  ProviderBehaviorStatePayload
+>;
 
 /** 全部合法消息的判别联合(按 `type` 判别)。 */
 export type HookMessage =
@@ -1291,7 +1486,10 @@ export type HookMessage =
   | HookProviderPrefsSetMessage
   | HookProviderPrefsStateMessage
   | HookGroupMessageMessage
-  | HookLifecyclePreferenceMessage;
+  | HookLifecyclePreferenceMessage
+  | HookProviderBehaviorGetMessage
+  | HookProviderBehaviorSetMessage
+  | HookProviderBehaviorStateMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
