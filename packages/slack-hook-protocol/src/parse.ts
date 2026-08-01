@@ -156,6 +156,17 @@ function validateHello(p: Record<string, unknown>): string | null {
   if (p.lifecycleAnnouncement !== undefined && typeof p.lifecycleAnnouncement !== 'boolean') {
     return 'hello.lifecycleAnnouncement must be a boolean when present';
   }
+  // defaultWorkspace 可选(旧 desktop 不发 = 无默认)。成员关系在协议层卡死:
+  // server 只能派发 workspaces 内的别名, 默认值若能指向清单外的别名, 等于给
+  // 这条约束开了后门 —— 而它恰恰是 server 侧派发校验的唯一依据。
+  if (p.defaultWorkspace !== undefined && p.defaultWorkspace !== null) {
+    if (!isNonEmptyString(p.defaultWorkspace)) {
+      return 'hello.defaultWorkspace must be a non-empty string or null when present';
+    }
+    if (!(p.workspaces as string[]).includes(p.defaultWorkspace)) {
+      return 'hello.defaultWorkspace must be one of hello.workspaces';
+    }
+  }
   return null;
 }
 
