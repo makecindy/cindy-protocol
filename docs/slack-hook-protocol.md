@@ -78,7 +78,7 @@ interface HookEnvelope<TType, TPayload> {
 
 | 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                                                                                                |
 | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `hello`         | desktop → server | 建连后第一帧。`protocolVersion`、`deviceId`、`deviceName`、`workspaces`(注册的别名列表;首位恒为内置对话伪目录 `HOOK_CHAT_WORKSPACE_ALIAS='chat'`)、`agents`(可用 agent 类型)、可选 `features`(desktop 侧能力标识,如 `HOOK_FEATURE_MULTI_TEAM`)、可选 `lifecycleAnnouncement`(当前设备的上下线通知偏好;缺省按 `true`)。别名映射变更后重发 hello 即时生效(server 以最新一帧为准) |
+| `hello`         | desktop → server | 建连后第一帧。`protocolVersion`、`deviceId`、`deviceName`、`workspaces`(注册的别名列表;首位恒为内置对话伪目录 `HOOK_CHAT_WORKSPACE_ALIAS='chat'`)、`agents`(可用 agent 类型)、可选 `features`(desktop 侧能力标识,如 `HOOK_FEATURE_MULTI_TEAM`)、可选 `lifecycleAnnouncement`(当前设备的上下线通知偏好;缺省按 `true`)、可选 `defaultWorkspace`(本连接的默认工作区别名;**必须是 `workspaces` 的成员**,校验器据此拒收;缺省 / `null` = 无默认,server 按各自既有规则决定,通常落 `chat`)。别名映射变更后重发 hello 即时生效(server 以最新一帧为准) |
 | `welcome`       | server → desktop | 握手完成。`serverName`、`features`(server 侧能力标识,包括 `HOOK_FEATURE_SLACK_TOOLS` / `HOOK_FEATURE_MULTI_TEAM` / `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT` / `HOOK_FEATURE_TURN_REOPEN`;空数组 = 均不支持)                                                                                                                                                                       |
 | `ping` / `pong` | 双向             | 心跳,收到 ping 必须回 pong。payload 恒空对象                                                                                                                                                                                                                                                                                                                                   |
 
@@ -172,6 +172,16 @@ interface HookEnvelope<TType, TPayload> {
 | `lifecycle.preference` | desktop → server | 即时更新当前设备的 Slack Bot 上下线通知偏好。payload 恒为 `{ enabled: boolean }`;desktop 仅在 `welcome.features` 包含 `HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT='lifecycle-announcement-v1'` 后发送。能力缺席时不发送,以握手兼容语义降级。 |
 
 握手初值由 `hello.lifecycleAnnouncement` 提供。新 server 对字段缺省按 `true` 处理以兼容旧 desktop;旧 server 忽略该可选字段并继续按既有开启行为运行。这样无论先升级 desktop 还是 server,都不会因单边升级意外关闭既有通知。
+
+### 默认工作目录(hello.defaultWorkspace)
+
+**要解决的问题**:一次交互只有一条公开消息名额的渠道没有承载目录选择面板的位置。Slack 有 Block Kit、Telegram 有 inline keyboard,都能在会话里让用户当场挑目录;X 只能回一条推文,既没有交互控件,也不值得为选目录多花一条公开回帖(每条都计费)。结果是这类渠道的任务只能永远落在内置「对话」伪目录上,碰不到本地仓库。
+
+**做法**:desktop 在握手时声明一个默认别名,server 在新建 lane 时按「本 lane 已定的目录 > `hello.defaultWorkspace` > `chat`」取值。不引入额外往返,也不占用正文字符。
+
+**成员关系在协议层卡死**:`defaultWorkspace` 必须是 `workspaces` 的成员,校验器据此拒收。server 只能派发清单内的别名,默认值若能指向清单外,等于给这条约束开了后门 —— 而它恰恰是 server 侧派发校验的唯一依据。
+
+**兼容**:字段可选。旧 desktop 不发即无默认,server 维持既有行为;旧 server 忽略该可选字段。desktop 侧目录被删除后必须把默认值归零后再握手,否则会因指向清单外的别名被拒收。
 
 ### 阶段 18 收口后的续跑(turn.reopen)
 
