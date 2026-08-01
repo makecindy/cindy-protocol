@@ -252,6 +252,19 @@ export interface HelloPayload {
   deviceName: string;
   /** 本连接注册的工作区别名列表 —— server 只能派发列表内的别名。 */
   workspaces: string[];
+  /**
+   * 本连接的默认工作区别名(可选; 缺省 / null = 无默认, server 按各自既有
+   * 规则决定, 通常落 HOOK_CHAT_WORKSPACE_ALIAS)。**必须是 workspaces 的成员**
+   * (协议层校验) —— 默认值不能绕过「server 只能派发列表内的别名」这条约束。
+   *
+   * 动机: X 这类**一次交互只有一条公开消息**的渠道没有交互式选择面板(Slack
+   * 有 Block Kit、Telegram 有 inline keyboard), 无处让用户挑目录, 于是所有
+   * 任务都只能落在对话伪目录上、碰不到本地仓库。由 desktop 在握手时声明一个
+   * 默认目录, 是不引入额外往返、也不占用正文字符的做法。
+   *
+   * 旧 server 校验器只查已知字段, 本字段安全透传(同 features 的兼容策略)。
+   */
+  defaultWorkspace?: string | null;
   /** 可用 agent 类型(如 'cc' / 'codex'), 供 server 侧校验 dispatch options。 */
   agents: string[];
   /**

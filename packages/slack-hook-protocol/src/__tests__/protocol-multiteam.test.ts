@@ -123,6 +123,47 @@ describe('可选 teamId 字段族', () => {
     expectReject({ ...msg, payload: { ...msg.payload, features: 'multi-team' } }, 'hello.features');
   });
 
+  it('hello.defaultWorkspace 可选, 且必须是 workspaces 的成员', () => {
+    roundTrip(
+      makeHello({
+        deviceId: 'd-1',
+        deviceName: 'dev',
+        workspaces: ['chat', 'cindy'],
+        agents: ['claude-code'],
+        defaultWorkspace: 'cindy',
+      }),
+    );
+    // 缺省 / 显式 null = 无默认, 都照常通过(旧 desktop 不发本字段)
+    roundTrip(
+      makeHello({ deviceId: 'd-1', deviceName: 'dev', workspaces: ['chat'], agents: ['cc'] }),
+    );
+    roundTrip(
+      makeHello({
+        deviceId: 'd-1',
+        deviceName: 'dev',
+        workspaces: ['chat'],
+        agents: ['cc'],
+        defaultWorkspace: null,
+      }),
+    );
+    const msg = makeHello({
+      deviceId: 'd-1',
+      deviceName: 'dev',
+      workspaces: ['chat'],
+      agents: ['cc'],
+    });
+    // 清单外的别名必须拒收: server 只能派发 workspaces 内的别名, 默认值若能
+    // 指向清单外, 就绕过了该约束(server 侧派发校验的唯一依据)。
+    expectReject(
+      { ...msg, payload: { ...msg.payload, defaultWorkspace: 'not-registered' } },
+      'hello.defaultWorkspace',
+    );
+    expectReject(
+      { ...msg, payload: { ...msg.payload, defaultWorkspace: 42 } },
+      'hello.defaultWorkspace',
+    );
+  });
+
   it('bind.start.teamId 可选(pin 重授权)', () => {
     roundTrip(makeBindStart({}));
     roundTrip(makeBindStart({ teamId: 'T0AAA' }));
