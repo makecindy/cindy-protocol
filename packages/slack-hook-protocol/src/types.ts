@@ -1330,6 +1330,14 @@ export interface ToolResponsePayload {
 export const HOOK_FEATURE_GROUP_RELAY = 'group-relay-v1';
 
 /**
+ * group.message 接收方代际标识。双方同时声明后,server 必须按实际扇出目标
+ * 填充 recipient,desktop 必须与当前 confirmed binding 精确匹配后才可入窗。
+ * 这是独立能力而不是静默改写 group-relay-v1:旧帧没有可信接收方身份,
+ * 新 desktop 对缺席本能力的 server 只能安全降级为不落群历史。
+ */
+export const HOOK_FEATURE_GROUP_RELAY_RECIPIENT = 'group-relay-recipient-v1';
+
+/**
  * group.message 的发送者标识(display name 为主)。
  * id / username 均可选(旧生产端不发时省略, 向后兼容): 新生产端(阶段 19
  * 起, provider.behavior 需要按发送者匹配群白名单以外的场景)可附带平台
@@ -1352,6 +1360,12 @@ export interface GroupMessageAuthor {
   username?: string;
 }
 
+/** server 针对单个 desktop 扇出 group.message 时的权威接收方绑定。 */
+export interface GroupMessageRecipient {
+  bindingId: string;
+  principalId: string;
+}
+
 /**
  * group.message(server -> desktop): 把一条群消息实时转发给该群已知绑定
  * 成员的桌面, fire-and-forget(无 ack, 桌面离线即丢 —— 零驻留的固有代价)。
@@ -1362,6 +1376,11 @@ export interface GroupMessageAuthor {
 export interface GroupMessagePayload {
   /** IM 平台标识(开放集合, 当前 'telegram')。 */
   provider: string;
+  /**
+   * 本帧实际路由到的绑定代际；仅在双方协商
+   * HOOK_FEATURE_GROUP_RELAY_RECIPIENT 后必填。旧生产端缺省以保持 wire 兼容。
+   */
+  recipient?: GroupMessageRecipient;
   chatId: string;
   /** forum topic / thread id; null = 主群流。 */
   threadId: string | null;
