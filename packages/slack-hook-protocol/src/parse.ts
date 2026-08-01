@@ -1111,6 +1111,17 @@ function isGroupMessageAuthorUsername(v: unknown): v is string {
 
 function validateGroupMessage(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.provider)) return 'group.message.provider must be a non-empty string';
+  if (p.recipient !== undefined) {
+    if (!isPlainObject(p.recipient)) {
+      return 'group.message.recipient must be an object when present';
+    }
+    if (!isNonEmptyString(p.recipient.bindingId)) {
+      return 'group.message.recipient.bindingId must be a non-empty string';
+    }
+    if (!isNonEmptyString(p.recipient.principalId)) {
+      return 'group.message.recipient.principalId must be a non-empty string';
+    }
+  }
   if (!isNonEmptyString(p.chatId)) return 'group.message.chatId must be a non-empty string';
   if (!isNullableNonEmptyString(p.threadId)) {
     return 'group.message.threadId must be a non-empty string or null';

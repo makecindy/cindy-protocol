@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   makeGroupMessage,
   makeTaskDispatch,
   parseHookMessage,
@@ -35,6 +36,7 @@ function expectReject(mutated: unknown, keyword: string): void {
 
 const FULL: GroupMessagePayload = {
   provider: 'telegram',
+  recipient: { bindingId: 'binding-101', principalId: '101' },
   chatId: '-1001234567890',
   threadId: '77',
   messageId: '4213',
@@ -103,6 +105,27 @@ describe('group.message(阶段 14)', () => {
 
   it('能力标识常量', () => {
     expect(HOOK_FEATURE_GROUP_RELAY).toBe('group-relay-v1');
+    expect(HOOK_FEATURE_GROUP_RELAY_RECIPIENT).toBe('group-relay-recipient-v1');
+  });
+
+  it('recipient 绑定接收方代际；旧帧可缺省，新帧字段必须完整', () => {
+    roundTrip(makeGroupMessage({ ...FULL, recipient: undefined }));
+    roundTrip(makeGroupMessage(FULL));
+    expectReject({ ...makeGroupMessage(FULL), payload: { ...FULL, recipient: null } }, 'recipient');
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, recipient: { bindingId: '', principalId: '101' } },
+      },
+      'recipient.bindingId',
+    );
+    expectReject(
+      {
+        ...makeGroupMessage(FULL),
+        payload: { ...FULL, recipient: { bindingId: 'binding-101', principalId: '' } },
+      },
+      'recipient.principalId',
+    );
   });
 
   it('provider 是开放集合: 非 telegram 值照常通过', () => {
