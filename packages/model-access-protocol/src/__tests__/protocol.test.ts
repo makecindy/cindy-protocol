@@ -4,6 +4,7 @@ import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_SCHEMA_VERSION,
+  MODEL_REGISTRY_STATUSES,
   parseListModelsResponse,
   parseModelRegistry,
   type ListModelsResponse,
@@ -381,6 +382,94 @@ describe('public model registry contract', () => {
         ],
       },
       'perAgent.codex',
+    );
+  });
+
+  it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
+    // The exact shape a policy-based client requires before deriving a
+    // selectable entry (MODEL_REGISTRY.md "Client consumption"): explicit
+    // status + self-consistent capability set + per-agent divergence. Pinned
+    // here so materialization never needs a schema bump.
+    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
+    const wire = {
+      ...VALID_REGISTRY,
+      models: [
+        {
+          ...VALID_REGISTRY.models[0],
+          status: 'preview',
+          maxOutputTokens: 64_000,
+          perAgent: {
+            codex: {
+              contextWindow: 272_000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'high',
+            },
+          },
+        },
+      ],
+    };
+    expect(parseModelRegistry(JSON.parse(JSON.stringify(wire))).ok).toBe(true);
+  });
+
+  it.each(MODEL_REGISTRY_STATUSES)('accepts the %s lifecycle status', (status) => {
+    expect(
+      parseModelRegistry({
+        ...VALID_REGISTRY,
+        models: [{ ...VALID_REGISTRY.models[0], status }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('accepts a fixed-effort entry: empty efforts with no default', () => {
+    const { defaultEffort: _defaultEffort, ...entry } = VALID_REGISTRY.models[0]!;
+    expect(
+      parseModelRegistry({
+        ...VALID_REGISTRY,
+        models: [{ ...entry, efforts: [] }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('keeps availability and selectability out of the wire schema', () => {
+    // Presence is the only registry-owned signal; availability/selectability
+    // markers are foreign fields at every level.
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    expectRegistryReject(
+      { ...VALID_REGISTRY, models: [{ ...entry, available: true }] },
+      'modelRegistry.models[0].available',
+    );
+    expectRegistryReject(
+      { ...VALID_REGISTRY, models: [{ ...entry, selectable: true }] },
+      'modelRegistry.models[0].selectable',
+    );
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [{ ...entry, routes: [{ ...route, available: true }] }],
+      },
+      'modelRegistry.models[0].routes[0].available',
+    );
+  });
+
+  it('rejects client-derived agent harnesses on routes and per-agent overrides', () => {
+    // Projection harnesses (for example a client-side pi tab) never appear on
+    // the wire; the closed agent enum is the contract that keeps them client-owned.
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [{ ...entry, routes: [{ ...route, agents: ['claude-code', 'pi'] }] }],
+      },
+      'modelRegistry.models[0].routes[0].agents',
+    );
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [{ ...entry, perAgent: { pi: { contextWindow: 200_000 } } }],
+      },
+      'modelRegistry.models[0].perAgent.pi',
     );
   });
 
