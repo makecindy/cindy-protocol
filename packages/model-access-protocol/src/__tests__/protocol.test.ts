@@ -387,9 +387,11 @@ describe('public model registry contract', () => {
 
   it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
     // The exact shape a policy-based client requires before deriving a
-    // selectable entry (MODEL_REGISTRY.md "Client consumption"): explicit
-    // status + self-consistent capability set + per-agent divergence. Pinned
-    // here so materialization never needs a schema bump.
+    // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
+    // availability"): explicit status + self-consistent capability set +
+    // per-agent divergence. This policy consumes the existing v1 shape
+    // without a schema bump; future field additions still follow the
+    // Change gate.
     expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
     const wire = {
       ...VALID_REGISTRY,
@@ -435,42 +437,37 @@ describe('public model registry contract', () => {
     // markers are foreign fields at every level.
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
-    expectRegistryReject(
-      { ...VALID_REGISTRY, models: [{ ...entry, available: true }] },
-      'modelRegistry.models[0].available',
-    );
-    expectRegistryReject(
-      { ...VALID_REGISTRY, models: [{ ...entry, selectable: true }] },
-      'modelRegistry.models[0].selectable',
-    );
-    expectRegistryReject(
-      {
-        ...VALID_REGISTRY,
-        models: [{ ...entry, routes: [{ ...route, available: true }] }],
-      },
-      'modelRegistry.models[0].routes[0].available',
-    );
+    const cases: [unknown, string][] = [
+      [{ ...entry, available: true }, 'modelRegistry.models[0].available'],
+      [{ ...entry, selectable: true }, 'modelRegistry.models[0].selectable'],
+      [
+        { ...entry, routes: [{ ...route, available: true }] },
+        'modelRegistry.models[0].routes[0].available',
+      ],
+    ];
+    for (const [model, path] of cases) {
+      expectRegistryReject({ ...VALID_REGISTRY, models: [model] }, path);
+    }
   });
 
   it('rejects client-derived agent harnesses on routes and per-agent overrides', () => {
     // Projection harnesses (for example a client-side pi tab) never appear on
-    // the wire; the closed agent enum is the contract that keeps them client-owned.
+    // the wire; the closed agent enum keeps them client-owned.
     const entry = VALID_REGISTRY.models[0]!;
     const route = entry.routes[0]!;
-    expectRegistryReject(
-      {
-        ...VALID_REGISTRY,
-        models: [{ ...entry, routes: [{ ...route, agents: ['claude-code', 'pi'] }] }],
-      },
-      'modelRegistry.models[0].routes[0].agents',
-    );
-    expectRegistryReject(
-      {
-        ...VALID_REGISTRY,
-        models: [{ ...entry, perAgent: { pi: { contextWindow: 200_000 } } }],
-      },
-      'modelRegistry.models[0].perAgent.pi',
-    );
+    const cases: [unknown, string][] = [
+      [
+        { ...entry, routes: [{ ...route, agents: ['claude-code', 'pi'] }] },
+        'modelRegistry.models[0].routes[0].agents',
+      ],
+      [
+        { ...entry, perAgent: { pi: { contextWindow: 200_000 } } },
+        'modelRegistry.models[0].perAgent.pi',
+      ],
+    ];
+    for (const [model, path] of cases) {
+      expectRegistryReject({ ...VALID_REGISTRY, models: [model] }, path);
+    }
   });
 
   it('rejects ambiguous overlapping reference prices for the same currency and variant', () => {

@@ -45,9 +45,9 @@ registry:
 The registry's wire fields carry the same meaning for every consumer; what
 differs is how much of the presence signal a client chooses to consume:
 
-- **Overlay-only consumers** (all existing clients) enrich models they already
-  know from discovery or the Gateway with registry metadata. They never create
-  models from the registry. This behavior remains valid and unchanged.
+- **Legacy and overlay-only consumers** enrich models they already know from
+  discovery or the Gateway with registry metadata. They never create models
+  from the registry. This behavior remains valid and unchanged.
 - **Policy-based materialization** (newer clients): a client MAY derive
   locally selectable entries from registry routes, under a client-owned policy
   restricted to its built-in providers. Such a policy must require an explicit
@@ -68,8 +68,8 @@ concern; routes never name them.
 
 `status` is the registry's only lifecycle signal:
 
-- `active` and `preview` describe currently offered models; clients may badge
-  `preview` as early availability.
+- `active` marks a current catalog entry; `preview` marks a pre-release stage
+  of the catalog lifecycle that clients may badge.
 - `deprecated` models remain routable; clients should de-emphasize or hide
   them by default while keeping explicit selection working.
 - `retired` is the explicit end-of-life tombstone: clients must not newly
