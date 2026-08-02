@@ -5,6 +5,7 @@ import {
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
+  modelRegistryCanonicalJson,
   parseListModelsResponse,
   parseModelRegistry,
   type ListModelsResponse,
@@ -430,6 +431,21 @@ describe('public model registry contract', () => {
         models: [{ ...entry, efforts: [] }],
       }).ok,
     ).toBe(true);
+  });
+
+  it('canonicalizes object key order while preserving snapshot content changes', () => {
+    const reordered = {
+      models: VALID_REGISTRY.models,
+      updatedAt: VALID_REGISTRY.updatedAt,
+      schemaVersion: VALID_REGISTRY.schemaVersion,
+    };
+    expect(modelRegistryCanonicalJson(reordered)).toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
+    expect(
+      modelRegistryCanonicalJson({
+        ...reordered,
+        models: reordered.models.slice(1),
+      }),
+    ).not.toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
   });
 
   it('keeps availability and selectability out of the wire schema', () => {

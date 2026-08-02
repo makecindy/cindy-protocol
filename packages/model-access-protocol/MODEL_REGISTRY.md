@@ -81,6 +81,16 @@ concern; routes never name them.
   clients must not infer deletion or retirement from absence, and
   discovery-proven models legitimately continue to exist.
 
+## Revision discipline
+
+`updatedAt` identifies an immutable complete Registry snapshot. Two snapshots
+with the same `updatedAt` MUST have identical canonical JSON content; consumers
+must reject and report a same-revision content change. A correction or rollback
+is published as the desired complete content with a later `updatedAt`
+(forward-fix), never by moving the timestamp backwards or rewriting an existing
+revision. The package exports `modelRegistryCanonicalJson` so client and server
+guards use the same normalization.
+
 ## Change gate
 
 The version 1 parser rejects every field outside its explicit allowlist. Adding
