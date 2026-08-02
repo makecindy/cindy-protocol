@@ -4,6 +4,8 @@ import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_SCHEMA_VERSION,
+  MODEL_REGISTRY_STATUSES,
+  modelRegistryCanonicalJson,
   parseListModelsResponse,
   parseModelRegistry,
   type ListModelsResponse,
@@ -382,6 +384,106 @@ describe('public model registry contract', () => {
       },
       'perAgent.codex',
     );
+  });
+
+  it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
+    // The exact shape a policy-based client requires before deriving a
+    // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
+    // availability"): explicit status + self-consistent capability set +
+    // per-agent divergence. This policy consumes the existing v1 shape
+    // without a schema bump; future field additions still follow the
+    // Change gate.
+    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
+    const wire = {
+      ...VALID_REGISTRY,
+      models: [
+        {
+          ...VALID_REGISTRY.models[0],
+          status: 'preview',
+          maxOutputTokens: 64_000,
+          perAgent: {
+            codex: {
+              contextWindow: 272_000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'high',
+            },
+          },
+        },
+      ],
+    };
+    expect(parseModelRegistry(JSON.parse(JSON.stringify(wire))).ok).toBe(true);
+  });
+
+  it.each(MODEL_REGISTRY_STATUSES)('accepts the %s lifecycle status', (status) => {
+    expect(
+      parseModelRegistry({
+        ...VALID_REGISTRY,
+        models: [{ ...VALID_REGISTRY.models[0], status }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('accepts a fixed-effort entry: empty efforts with no default', () => {
+    const { defaultEffort: _defaultEffort, ...entry } = VALID_REGISTRY.models[0]!;
+    expect(
+      parseModelRegistry({
+        ...VALID_REGISTRY,
+        models: [{ ...entry, efforts: [] }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('canonicalizes object key order while preserving snapshot content changes', () => {
+    const reordered = {
+      models: VALID_REGISTRY.models,
+      updatedAt: VALID_REGISTRY.updatedAt,
+      schemaVersion: VALID_REGISTRY.schemaVersion,
+    };
+    expect(modelRegistryCanonicalJson(reordered)).toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
+    expect(
+      modelRegistryCanonicalJson({
+        ...reordered,
+        models: reordered.models.slice(1),
+      }),
+    ).not.toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
+  });
+
+  it('keeps availability and selectability out of the wire schema', () => {
+    // Presence is the only registry-owned signal; availability/selectability
+    // markers are foreign fields at every level.
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    const cases: [unknown, string][] = [
+      [{ ...entry, available: true }, 'modelRegistry.models[0].available'],
+      [{ ...entry, selectable: true }, 'modelRegistry.models[0].selectable'],
+      [
+        { ...entry, routes: [{ ...route, available: true }] },
+        'modelRegistry.models[0].routes[0].available',
+      ],
+    ];
+    for (const [model, path] of cases) {
+      expectRegistryReject({ ...VALID_REGISTRY, models: [model] }, path);
+    }
+  });
+
+  it('rejects client-derived agent harnesses on routes and per-agent overrides', () => {
+    // Projection harnesses (for example a client-side pi tab) never appear on
+    // the wire; the closed agent enum keeps them client-owned.
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    const cases: [unknown, string][] = [
+      [
+        { ...entry, routes: [{ ...route, agents: ['claude-code', 'pi'] }] },
+        'modelRegistry.models[0].routes[0].agents',
+      ],
+      [
+        { ...entry, perAgent: { pi: { contextWindow: 200_000 } } },
+        'modelRegistry.models[0].perAgent.pi',
+      ],
+    ];
+    for (const [model, path] of cases) {
+      expectRegistryReject({ ...VALID_REGISTRY, models: [model] }, path);
+    }
   });
 
   it('rejects ambiguous overlapping reference prices for the same currency and variant', () => {

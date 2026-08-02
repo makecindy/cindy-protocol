@@ -24,6 +24,11 @@ export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 /** Version of the provider-independent public model registry embedded in Catalog. */
 export const MODEL_REGISTRY_SCHEMA_VERSION = 1 as const;
 
+/**
+ * Lifecycle signal. `retired` is the explicit end-of-life tombstone; the
+ * absence of an entry or route is not (omission is not retirement). See
+ * MODEL_REGISTRY.md "Lifecycle status".
+ */
 export const MODEL_REGISTRY_STATUSES = ['preview', 'active', 'deprecated', 'retired'] as const;
 export type ModelRegistryStatus = (typeof MODEL_REGISTRY_STATUSES)[number];
 
@@ -66,7 +71,12 @@ export interface ModelReferencePrice {
 
 /**
  * Maps a canonical model to the exact id accepted by one provider route.
- * A dynamic provider model list remains authoritative for actual availability.
+ *
+ * A route declares catalog presence, not entitlement: newer clients may
+ * derive locally selectable entries from it under their own built-in
+ * provider policy, while a dynamic provider model list remains authoritative
+ * for live entitlement/availability. See MODEL_REGISTRY.md "Presence,
+ * entitlement, and sale availability".
  */
 export interface ModelRegistryRoute {
   providerId: string;

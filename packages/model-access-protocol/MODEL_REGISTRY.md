@@ -26,6 +26,71 @@ preferences. In particular, fields such as `contextWindowExplicit`,
 availability, and Cindy AI / XD Gateway sale prices belong to their respective
 client, discovery, or gateway layers.
 
+## Presence, entitlement, and sale availability
+
+Three concepts must never be conflated, and only the first one lives in this
+registry:
+
+- **Catalog presence** (this registry): a canonical model exists in Cindy's
+  public catalog, reachable through the listed provider routes and agent
+  harnesses, with the curated metadata and lifecycle status above.
+- **Live entitlement / availability** (never in the registry): whether a given
+  account, subscription, or session can invoke a model right now. This is
+  owned by client-side discovery and runtime verification, such as dynamic
+  provider model lists and session capability checks.
+- **Gateway sale availability and actual prices** (never in the registry):
+  whether Cindy AI / XD Gateway currently sells a model and at what price.
+  This is owned by the Gateway `/models` endpoint and billing.
+
+The registry's wire fields carry the same meaning for every consumer; what
+differs is how much of the presence signal a client chooses to consume:
+
+- **Legacy and overlay-only consumers** enrich models they already know from
+  discovery or the Gateway with registry metadata. They never create models
+  from the registry. This behavior remains valid and unchanged.
+- **Policy-based materialization** (newer clients): a client MAY derive
+  locally selectable entries from registry routes, under a client-owned policy
+  restricted to its built-in providers. Such a policy must require an explicit
+  `status` and a self-consistent capability set — `contextWindow`, `efforts`,
+  and a `defaultEffort` consistent with them (an empty `efforts` list means a
+  fixed-effort model and implies no default). Entries without an explicit
+  `status` stay metadata-only and must never materialize; this is the
+  backward-compatibility gate that keeps registry snapshots written before
+  materialization existed from silently growing into selectable models.
+
+Materialized selectability is a client-derived presentation state, not an
+availability claim by the registry: invocation can still fail entitlement, and
+clients surface that failure at runtime. Client-derived agent harnesses beyond
+`MODEL_ACCESS_AGENTS` (for example projection-based harnesses) are a client
+concern; routes never name them.
+
+## Lifecycle status
+
+`status` is the registry's only lifecycle signal:
+
+- `active` marks a current catalog entry; `preview` marks a pre-release stage
+  of the catalog lifecycle that clients may badge.
+- `deprecated` models remain routable; clients should de-emphasize or hide
+  them by default while keeping explicit selection working.
+- `retired` is the explicit end-of-life tombstone: clients must not newly
+  materialize such routes and may suppress new selection of the model even
+  when discovery still reports it. Sessions already running on the model are
+  a client concern.
+- **Omission is not retirement.** An entry or route missing from a newer
+  snapshot only means it is no longer present in that catalog snapshot;
+  clients must not infer deletion or retirement from absence, and
+  discovery-proven models legitimately continue to exist.
+
+## Revision discipline
+
+`updatedAt` identifies an immutable complete Registry snapshot. Two snapshots
+with the same `updatedAt` MUST have identical canonical JSON content; consumers
+must reject and report a same-revision content change. A correction or rollback
+is published as the desired complete content with a later `updatedAt`
+(forward-fix), never by moving the timestamp backwards or rewriting an existing
+revision. The package exports `modelRegistryCanonicalJson` so client and server
+guards use the same normalization.
+
 ## Change gate
 
 The version 1 parser rejects every field outside its explicit allowlist. Adding

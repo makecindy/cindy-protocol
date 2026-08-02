@@ -6,3 +6,4 @@
 
 export * from './types.js';
 export { isModelCurrency, parseListModelsResponse, parseModelRegistry } from './parse.js';
+export { modelRegistryCanonicalJson } from './modelRegistry.js';
