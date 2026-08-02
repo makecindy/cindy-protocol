@@ -9,7 +9,6 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "noEmit": true,
-    "sourceMap": true,
     "baseUrl": "."
   },
   "include": ["src/**/*"]
