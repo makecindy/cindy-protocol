@@ -98,7 +98,10 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 - 旧客户端忽略整个可选段；新客户端遇到未知 registry 版本或非法内容时保留上一份
   有效 registry，并继续使用 bundled fallback。
 
-协议包以 TypeScript 源码发布。Node16/NodeNext 消费方使用入口中的显式 `.js`
-扩展名；Metro/React Native 消费方应像现有 `device-link` workspace 包一样，把该
-协议包注册为 TS 源码包并配置 `.js` → `.ts` 的 resolver 映射，不应在协议包内提交
-伪造的 JavaScript 构建产物。
+协议包构建为 `dist/*.js` 与 `dist/*.d.ts`，公开入口只指向构建产物。消费方在打包或
+部署 workspace 依赖前必须先执行 `@cindy/model-access-protocol` 的 `build`；纯 Node
+生产进程不得直接加载 `node_modules` 内的 TypeScript 源码。构建产物由消费方流水线
+生成，不提交到协议仓库。
+
+源码内部使用显式 `.js` 扩展名，确保 TypeScript 按 NodeNext 编译后生成的 ESM 可由
+Node 直接加载。Metro/React Native 消费方同样使用构建后的零依赖 JavaScript 入口。
