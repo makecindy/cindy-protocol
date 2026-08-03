@@ -315,6 +315,86 @@ describe('plugin delivery contract', () => {
     ).toThrow(PluginProtocolError);
   });
 
+  it('normalizes missing removals to an empty array', () => {
+    const legacy = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+    });
+    expect(legacy.removals).toEqual([]);
+    const explicitNull = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      removals: null,
+    });
+    expect(explicitNull.removals).toEqual([]);
+  });
+
+  it('parses organization removal notices', () => {
+    const removal = {
+      pluginId: `c${'r'.repeat(24)}`,
+      ghostId: validManifest.id,
+      scope: 'organization',
+      organizationId: 'org-1',
+      action: 'purge',
+      removedAt: '2026-08-03T08:00:00.000Z',
+    } as const;
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      removals: [removal],
+    });
+    expect(response.removals).toEqual([removal]);
+  });
+
+  it('skips removal notices with unknown actions while keeping known ones', () => {
+    const removal = {
+      pluginId: `c${'r'.repeat(24)}`,
+      ghostId: validManifest.id,
+      scope: 'organization',
+      organizationId: 'org-1',
+      action: 'purge',
+      removedAt: '2026-08-03T08:00:00.000Z',
+    } as const;
+    const response = parseListPluginsResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugins: [],
+      nextCursor: null,
+      removals: [{ ...removal, pluginId: `c${'d'.repeat(24)}`, action: 'disable' }, removal],
+    });
+    expect(response.removals).toEqual([removal]);
+  });
+
+  it('rejects malformed removal notices', () => {
+    const removal = {
+      pluginId: `c${'r'.repeat(24)}`,
+      ghostId: validManifest.id,
+      scope: 'organization',
+      organizationId: 'org-1',
+      action: 'purge',
+      removedAt: '2026-08-03T08:00:00.000Z',
+    } as const;
+    const withRemovals = (removals: unknown) => () =>
+      parseListPluginsResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugins: [],
+        nextCursor: null,
+        removals,
+      });
+    expect(withRemovals({})).toThrow(PluginProtocolError);
+    expect(withRemovals([{ ...removal, pluginId: 'INVALID' }])).toThrow(PluginProtocolError);
+    expect(withRemovals([{ ...removal, ghostId: 'Bad Ghost Id' }])).toThrow(PluginProtocolError);
+    expect(withRemovals([{ ...removal, organizationId: null }])).toThrow(PluginProtocolError);
+    expect(withRemovals([{ ...removal, scope: 'public' }])).toThrow(PluginProtocolError);
+    expect(withRemovals([{ ...removal, action: 42 }])).toThrow(PluginProtocolError);
+    // 动作未知但其余字段不合法的通告仍然整体拒绝:跳过只发生在结构校验通过之后。
+    expect(withRemovals([{ ...removal, action: 'disable', removedAt: 'soon' }])).toThrow(
+      PluginProtocolError,
+    );
+  });
+
   it('rejects detail metadata that differs from its manifest', () => {
     expect(() =>
       parseGetPluginResponse({

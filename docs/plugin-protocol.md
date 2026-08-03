@@ -120,7 +120,7 @@ const detail = parseGetPluginResponse(await detailResponse.json());
 const download = parsePluginDownloadResponse(await downloadResponse.json());
 ```
 
-- `parseListPluginsResponse`：解析分页列表摘要，不包含完整 manifest；
+- `parseListPluginsResponse`：解析分页列表摘要与清理通告，不包含完整 manifest；
 - `parseGetPluginResponse`：解析单个 Plugin 详情及当前 Release 的完整 manifest；
 - `parsePluginDownloadResponse`：解析短期 HTTPS 下载地址及完整性元数据。
 
@@ -153,6 +153,36 @@ try {
 ```
 
 解析器返回的对象只保留协议已知字段。列表、详情和下载响应中的 SHA-256 必须是 64 位小写十六进制，字节数必须是正整数，时间必须是带毫秒的 UTC ISO 8601 字符串；下载地址只接受 HTTPS。下载响应不含 `schemaVersion`，因为它只会在列表或详情 envelope 已成功解析后请求。
+
+## 清理通告（removals）
+
+列表响应可携带可选的顶层 `removals` 数组，通告「曾上架、现已下架并要求处置本地副本」的 Plugin。它与 `plugins` 互补：`plugins` 只含在架条目，被清理的 Plugin 不会回到列表里；detail 与 download 对被清理的 Plugin 维持 404。
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "plugins": [],
+  "nextCursor": null,
+  "removals": [
+    {
+      "pluginId": "cxxxxxxxxxxxxxxxxxxxxxxxx",
+      "ghostId": "acme-report",
+      "scope": "organization",
+      "organizationId": "org_123",
+      "action": "purge",
+      "removedAt": "2026-08-03T08:00:00.000Z",
+    },
+  ],
+}
+```
+
+- 这是 v2 的可选追加字段，不提升 `PLUGIN_API_SCHEMA_VERSION`。老服务端不下发、老客户端按未知字段忽略；解析器在字段缺失或为 `null` 时规范化为空数组。
+- 服务端只对已验签的组织身份下发其所属组织的通告，与请求的 `scope` 查询参数无关；当前 `scope` 恒为 `organization`、`action` 恒为 `purge`（删除本地已安装副本及插件本地数据）。
+- 分页时每一页都携带完整且相同的 `removals`，不受搜索关键字与游标影响；客户端聚合分页时按 `pluginId` 去重。
+- 服务端保证单个响应内 `plugins` 与 `removals` 不含相同 `pluginId`，但跨分页请求期间状态可能翻转：客户端应在整轮分页完成后再应用通告；同一轮内某 `pluginId` 既出现在任一页 `plugins` 又出现在任一页 `removals` 时，以在架为准、不执行清理。
+- `removedAt` 是最近一次下架时间，重新上架再下架会刷新；消费方不得据此假设单调或首次下架时间，去重与匹配一律以 `pluginId` 为准。
+- `action` 是取值级前向兼容位：结构合法但动作未知的通告会被解析器跳过，不影响其余内容，服务端未来新增动作不要求客户端同步升级；结构不合法（`pluginId`、`ghostId`、scope 一致性、时间格式）仍抛出 `PluginProtocolError`。
+- 通告不是无条件删除指令：客户端执行前必须与本地安装记录双重校验（`pluginId` 一致、来源为服务端市场、本地记录的 scope 为 `organization`），校验不过时最多把该 Plugin 标记为不可更新，不得删除本地内容。
 
 ## 字段语义
 

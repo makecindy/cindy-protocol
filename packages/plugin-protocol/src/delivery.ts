@@ -89,6 +89,28 @@ export interface VisiblePluginDetail {
   currentRelease: PluginReleaseDetail;
 }
 
+/** 清理通告支持的处置动作；解析器会跳过动作未知的通告（未来扩展位）。 */
+export const PLUGIN_REMOVAL_ACTIONS = ['purge'] as const;
+
+/** `purge` 表示删除本地已安装副本及插件本地数据。 */
+export type PluginRemovalAction = (typeof PLUGIN_REMOVAL_ACTIONS)[number];
+
+/** 曾上架、现已下架并被要求处置本地副本的 Plugin 的清理通告。 */
+export interface PluginRemovalNotice {
+  /** 被清理 Plugin 的永久资源 ID；客户端据此匹配本地安装记录并跨分页去重。 */
+  pluginId: string;
+  /** 通告对应的 `ghost.json.id` 快照；供客户端双重校验，不能代替 `pluginId`。 */
+  ghostId: string;
+  /** 被清理 Plugin 的来源范围；当前服务端只对 organization 下发通告。 */
+  scope: PluginScope;
+  /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
+  organizationId: string | null;
+  /** 处置动作。 */
+  action: PluginRemovalAction;
+  /** 最近一次下架时间；重新上架再下架会刷新，消费方不得假设单调。 */
+  removedAt: string;
+}
+
 /** Plugin 分页列表响应。 */
 export interface ListPluginsResponse {
   /** Plugin HTTP envelope 版本。 */
@@ -97,6 +119,8 @@ export interface ListPluginsResponse {
   plugins: VisiblePluginSummary[];
   /** 下一页使用的 Plugin 资源 ID；没有下一页时为 `null`。 */
   nextCursor: string | null;
+  /** 对请求身份可见的清理通告；服务端每页重复完整下发，缺失时规范化为空数组。 */
+  removals: PluginRemovalNotice[];
 }
 
 /** 单个 Plugin 详情响应。 */
@@ -233,6 +257,27 @@ function parseReleaseDetail(value: unknown, ghostId: string, path: string): Plug
   return { ...summary, manifest: validatedManifest.manifest };
 }
 
+function parseScope(value: unknown, path: string): PluginScope {
+  if (!(PLUGIN_SCOPES as readonly unknown[]).includes(value)) {
+    throw new PluginProtocolError(`${path}.scope 不合法`);
+  }
+  return value as PluginScope;
+}
+
+function parseScopedOrganizationId(
+  scope: PluginScope,
+  value: unknown,
+  path: string,
+): string | null {
+  if (
+    ((scope === 'public' || scope === 'personal') && value !== null) ||
+    (scope === 'organization' && (typeof value !== 'string' || value.length === 0))
+  ) {
+    throw new PluginProtocolError(`${path}.organizationId 与 scope 不一致`);
+  }
+  return value as string | null;
+}
+
 function parseVisiblePluginBase(
   value: unknown,
   path: string,
@@ -250,18 +295,8 @@ function parseVisiblePluginBase(
   const raw = object(value, path);
   if (!isValidPluginResourceId(raw.id)) throw new PluginProtocolError(`${path}.id 不合法`);
   if (!isValidGhostId(raw.ghostId)) throw new PluginProtocolError(`${path}.ghostId 不合法`);
-  if (!(PLUGIN_SCOPES as readonly unknown[]).includes(raw.scope)) {
-    throw new PluginProtocolError(`${path}.scope 不合法`);
-  }
-  const scope = raw.scope as PluginScope;
-  const organizationId = raw.organizationId;
-  if (
-    ((scope === 'public' || scope === 'personal') && organizationId !== null) ||
-    (scope === 'organization' &&
-      (typeof organizationId !== 'string' || organizationId.length === 0))
-  ) {
-    throw new PluginProtocolError(`${path}.organizationId 与 scope 不一致`);
-  }
+  const scope = parseScope(raw.scope, path);
+  const organizationId = parseScopedOrganizationId(scope, raw.organizationId, path);
   if (typeof raw.defaultInstall !== 'boolean') {
     throw new PluginProtocolError(`${path}.defaultInstall 必须是 boolean`);
   }
@@ -274,7 +309,7 @@ function parseVisiblePluginBase(
       raw.description === null ? null : string(raw.description, `${path}.description`, 300),
     author: raw.author === null ? null : string(raw.author, `${path}.author`),
     scope,
-    organizationId: organizationId as string | null,
+    organizationId,
     defaultInstall: raw.defaultInstall,
   };
 }
@@ -336,11 +371,47 @@ function nextCursor(value: unknown): string | null {
   return value;
 }
 
+function parseRemovalNotice(value: unknown, path: string): PluginRemovalNotice | null {
+  const raw = object(value, path);
+  if (!isValidPluginResourceId(raw.pluginId)) {
+    throw new PluginProtocolError(`${path}.pluginId 不合法`);
+  }
+  if (!isValidGhostId(raw.ghostId)) throw new PluginProtocolError(`${path}.ghostId 不合法`);
+  const scope = parseScope(raw.scope, path);
+  const organizationId = parseScopedOrganizationId(scope, raw.organizationId, path);
+  const action = string(raw.action, `${path}.action`, 64);
+  const removedAt = isoDate(raw.removedAt, `${path}.removedAt`);
+  // 未知动作是未来扩展位：结构校验通过后跳过该条而不是拒绝整个响应，
+  // 这样服务端新增动作不会打挂旧客户端的整轮列表解析。
+  if (!(PLUGIN_REMOVAL_ACTIONS as readonly string[]).includes(action)) return null;
+  return {
+    pluginId: raw.pluginId,
+    ghostId: raw.ghostId,
+    scope,
+    organizationId,
+    action: action as PluginRemovalAction,
+    removedAt,
+  };
+}
+
+function parseRemovals(value: unknown): PluginRemovalNotice[] {
+  // 老的 v2 服务端或未携带通告的身份不带该字段；缺失时规范化为空数组。
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw new PluginProtocolError('response.removals 必须是数组');
+  const notices: PluginRemovalNotice[] = [];
+  value.forEach((entry, index) => {
+    const notice = parseRemovalNotice(entry, `removals[${index}]`);
+    if (notice) notices.push(notice);
+  });
+  return notices;
+}
+
 /**
  * 解析并规范化 Plugin 分页列表响应。
  *
  * 未知字段会被忽略；已知字段缺失、值不合法或 schema 版本不支持时抛出
- * `PluginProtocolError`。
+ * `PluginProtocolError`。`removals` 缺失时规范化为空数组，动作未知的通告
+ * 会被跳过而不影响其余内容。
  */
 export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
   const raw = object(value, 'response');
@@ -352,6 +423,7 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
     schemaVersion: PLUGIN_API_SCHEMA_VERSION,
     plugins: raw.plugins.map(parseVisiblePluginSummary),
     nextCursor: nextCursor(raw.nextCursor),
+    removals: parseRemovals(raw.removals),
   };
 }
 
