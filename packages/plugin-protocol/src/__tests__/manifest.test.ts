@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SCHEMA_VERSION,
+  ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
   isValidGhostId,
   validateGhostManifest,
@@ -70,6 +71,9 @@ describe('Ghost manifest contract', () => {
         },
       }),
     });
+    expect(result.ok && ghostManifestUsesOidcToken(result.manifest)).toBe(true);
+    const baseline = validateGhostManifest(validManifest);
+    expect(baseline.ok && ghostManifestUsesOidcToken(baseline.manifest)).toBe(false);
   });
 
   it('rejects unsafe oidc-token declarations', () => {
@@ -136,6 +140,14 @@ describe('Ghost manifest contract', () => {
     expect(validateGhostManifest(secret({ url: 'https://api.example.com/keys' }))).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不允许声明 url'),
+    });
+    expect(validateGhostManifest(secret({ exchange: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许声明 exchange'),
+    });
+    expect(validateGhostManifest(secret({ oauth: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('oauth 仅允许在 source: oauth'),
     });
     expect(
       validateGhostManifest(

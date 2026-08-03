@@ -206,7 +206,7 @@ try {
 | `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。              |
 | `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
-`parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
+`parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`、顶层 `name/description/author` 与当前 manifest 一致，以及声明 `oidc-token` 的 manifest 只能属于 `organization` scope。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
 
 ## 版本
 

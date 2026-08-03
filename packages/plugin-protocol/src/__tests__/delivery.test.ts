@@ -26,6 +26,26 @@ const validIcon = {
   url: 'https://cdn.example.com/plugin-icon.png?signature=example',
   expiresAt: '2026-07-19T00:05:00.000Z',
 } as const;
+const oidcManifest = {
+  ...validManifest,
+  tools: undefined,
+  slots: ['network'],
+  network: {
+    hosts: ['api.example.com'],
+    secrets: [
+      {
+        key: 'cindy_identity',
+        label: 'Cindy organization identity',
+        source: 'oidc-token',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          hosts: ['api.example.com'],
+        },
+      },
+    ],
+  },
+} as const;
 
 describe('plugin delivery contract', () => {
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
@@ -149,6 +169,40 @@ describe('plugin delivery contract', () => {
       },
     });
     expect(response.plugin.currentRelease.manifest.id).toBe(validManifest.id);
+  });
+
+  it('allows oidc-token only in organization Plugin details', () => {
+    const plugin = {
+      id: pluginId,
+      ghostId: oidcManifest.id,
+      name: oidcManifest.name,
+      description: null,
+      author: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-oidc',
+        version: oidcManifest.version,
+        sha256: 'a'.repeat(64),
+        sizeBytes: 1024,
+        publishedAt: '2026-07-19T00:00:00.000Z',
+        manifest: oidcManifest,
+      },
+    };
+
+    expect(
+      parseGetPluginResponse({
+        schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+        plugin: { ...plugin, scope: 'organization', organizationId: 'org-1' },
+      }).plugin.scope,
+    ).toBe('organization');
+    for (const scope of ['public', 'personal'] as const) {
+      expect(() =>
+        parseGetPluginResponse({
+          schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+          plugin: { ...plugin, scope, organizationId: null },
+        }),
+      ).toThrow(/currentRelease\.manifest.*oidc-token.*organization scope/);
+    }
   });
 
   it('keeps availability separate from default installation', () => {

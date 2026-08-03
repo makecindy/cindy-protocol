@@ -1,4 +1,9 @@
-import { isValidGhostId, validateGhostManifest, type GhostManifest } from './manifest.js';
+import {
+  ghostManifestUsesOidcToken,
+  isValidGhostId,
+  validateGhostManifest,
+  type GhostManifest,
+} from './manifest.js';
 
 /** Plugin 客户端 HTTP list/detail envelope 版本；与 ghost.json 版本独立演进。 */
 export const PLUGIN_API_SCHEMA_VERSION = 2 as const;
@@ -302,6 +307,11 @@ function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDe
     parsed.ghostId,
     `${path}.currentRelease`,
   );
+  if (ghostManifestUsesOidcToken(currentRelease.manifest) && parsed.scope !== 'organization') {
+    throw new PluginProtocolError(
+      `${path}.currentRelease.manifest 的 oidc-token 仅允许 organization scope`,
+    );
+  }
   const manifestDescription = currentRelease.manifest.description ?? null;
   const manifestAuthor = currentRelease.manifest.author ?? null;
   if (parsed.name !== currentRelease.manifest.name) {

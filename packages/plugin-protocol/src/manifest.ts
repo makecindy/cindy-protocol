@@ -812,6 +812,11 @@ export interface GhostManifest {
   skill?: GhostSkillNeeds;
 }
 
+/** 判断已校验的 manifest 是否请求 Host 托管的企业身份凭证。 */
+export function ghostManifestUsesOidcToken(manifest: GhostManifest): boolean {
+  return manifest.network?.secrets?.some((secret) => secret.source === 'oidc-token') ?? false;
+}
+
 /** 判断值是否可作为 `ghost.json.id` 和跨平台安全的安装目录名。 */
 export function isValidGhostId(id: unknown): id is string {
   return typeof id === 'string' && GHOST_ID_RE.test(id) && !isWindowsReservedName(id);
