@@ -637,4 +637,41 @@ describe('model access schema v2', () => {
     };
     expect(parseResolveResponse(badProvenance).ok).toBe(false);
   });
+
+  it('accepts the resolver per-field provenance map, rejecting maps with an unsupported value', () => {
+    // 服务端 enrichment 逐字段发 provenance(每个字段来自 provider/override/knowledge-base/default)。
+    const perFieldProvenance = {
+      schemaVersion: 2,
+      knowledgeRevision: 'r1',
+      entries: [
+        {
+          providerId: 'p',
+          agent: 'codex',
+          models: [
+            {
+              ...resolvedModel,
+              provenance: {
+                id: 'provider',
+                contextWindow: 'override',
+                modalities: 'knowledge-base',
+                category: 'default',
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(parseResolveResponse(JSON.parse(JSON.stringify(perFieldProvenance))).ok).toBe(true);
+    const badValueInMap = {
+      ...perFieldProvenance,
+      entries: [
+        {
+          providerId: 'p',
+          agent: 'codex',
+          models: [{ ...resolvedModel, provenance: { contextWindow: 'bogus' } }],
+        },
+      ],
+    };
+    expect(parseResolveResponse(badValueInMap).ok).toBe(false);
+  });
 });

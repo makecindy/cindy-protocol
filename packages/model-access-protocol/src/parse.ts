@@ -376,6 +376,16 @@ function isModelProvenance(value: unknown): boolean {
   );
 }
 
+/**
+ * The resolver emits provenance **per field** (`{ contextWindow: 'override', modalities:
+ * 'knowledge-base', … }`), so accept a plain object whose values are all supported provenance
+ * strings. A single top-level provenance string stays accepted for backward compatibility.
+ */
+function isModelProvenanceValue(value: unknown): boolean {
+  if (isModelProvenance(value)) return true;
+  return isPlainObject(value) && Object.values(value).every((entry) => isModelProvenance(entry));
+}
+
 function requiredStringError(value: unknown, path: string, max: number): string | null {
   if (typeof value !== 'string' || value.length === 0) {
     return `${path} must be a non-empty string`;
@@ -505,8 +515,8 @@ function resolvedModelError(value: unknown, path: string): string | null {
   ) {
     return `${path}.status must be active, alpha, or deprecated when present`;
   }
-  if (value.provenance !== undefined && !isModelProvenance(value.provenance)) {
-    return `${path}.provenance must be a supported provenance value when present`;
+  if (value.provenance !== undefined && !isModelProvenanceValue(value.provenance)) {
+    return `${path}.provenance must be a supported provenance value or per-field provenance map when present`;
   }
   return null;
 }
@@ -630,8 +640,8 @@ function v2ModelIncrementalError(value: unknown, path: string): string | null {
   ) {
     return `${path}.status must be active, alpha, or deprecated when present`;
   }
-  if (value.provenance !== undefined && !isModelProvenance(value.provenance)) {
-    return `${path}.provenance must be a supported provenance value when present`;
+  if (value.provenance !== undefined && !isModelProvenanceValue(value.provenance)) {
+    return `${path}.provenance must be a supported provenance value or per-field provenance map when present`;
   }
   return null;
 }

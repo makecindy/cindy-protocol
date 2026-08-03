@@ -212,6 +212,13 @@ export const MODEL_ACCESS_PROVENANCES = [
 ] as const;
 export type ModelProvenance = (typeof MODEL_ACCESS_PROVENANCES)[number];
 
+/**
+ * Per-field provenance: maps a resolved model field name (`contextWindow`, `modalities`, …) to the
+ * layer that supplied its value. The resolver emits provenance **per field**, so this is the wire
+ * shape; a single top-level {@link ModelProvenance} string stays accepted for backward compatibility.
+ */
+export type ModelFieldProvenance = Partial<Record<string, ModelProvenance>>;
+
 /** Display and capability metadata for a resolved per-provider model offer. */
 export interface ResolvedModelCapabilities {
   reasoning?: boolean;
@@ -259,7 +266,7 @@ export interface ResolvedModel {
   releaseDate?: string;
   status?: 'active' | 'alpha' | 'deprecated';
   defaultEnabled?: boolean;
-  provenance?: ModelProvenance;
+  provenance?: ModelProvenance | ModelFieldProvenance;
 }
 
 export interface ResolveRequestModel {
@@ -313,7 +320,7 @@ export interface ListModelsResponseV2Model extends ModelCatalogEntry {
   cost?: ResolvedModelCost;
   releaseDate?: string;
   status?: 'active' | 'alpha' | 'deprecated';
-  provenance?: ModelProvenance;
+  provenance?: ModelProvenance | ModelFieldProvenance;
 }
 
 /** Schema v2 keeps the v1 models envelope and fields, adding resolved metadata. */
