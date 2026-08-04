@@ -85,16 +85,18 @@ describe('Ghost manifest contract', () => {
       settingsHtml: 'settings.html',
       network: {
         hosts: ['api.example.com'],
-        secrets: [{
-          key: 'api_key',
-          label: 'API Key',
-          inject: {
-            header: 'Authorization',
-            format: 'Bearer {value}',
-            paths: ['/v1/z', '/v1/convert'],
-            methods: ['POST', 'GET'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              paths: ['/v1/z', '/v1/convert'],
+              methods: ['POST', 'GET'],
+            },
           },
-        }],
+        ],
       },
     });
     expect(result.ok).toBe(true);
@@ -108,19 +110,27 @@ describe('Ghost manifest contract', () => {
   });
 
   it('rejects ambiguous endpoint paths and unsupported methods', () => {
-    const validateInject = (inject: Record<string, unknown>) => validateGhostManifest({
-      ...validManifest,
-      tools: undefined,
-      slots: ['network'],
-      settingsHtml: 'settings.html',
-      network: {
-        hosts: ['api.example.com'],
-        secrets: [{ key: 'api_key', label: 'API Key', inject }],
-      },
-    });
-    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/a/../b'] }).ok).toBe(false);
-    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/%2fsecret'] }).ok).toBe(false);
-    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', methods: ['HEAD'] }).ok).toBe(false);
+    const validateInject = (inject: Record<string, unknown>) =>
+      validateGhostManifest({
+        ...validManifest,
+        tools: undefined,
+        slots: ['network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [{ key: 'api_key', label: 'API Key', inject }],
+        },
+      });
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/a/../b'] }).ok,
+    ).toBe(false);
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/%2fsecret'] })
+        .ok,
+    ).toBe(false);
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', methods: ['HEAD'] }).ok,
+    ).toBe(false);
   });
 
   it('rejects unsafe oidc-token declarations', () => {

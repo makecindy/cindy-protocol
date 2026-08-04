@@ -205,6 +205,59 @@ describe('plugin delivery contract', () => {
     }
   });
 
+  it('preserves secret endpoint scope through release manifest normalization', () => {
+    // delivery 层会重新校验并输出规范化 manifest;endpoint 收窄一旦在这里被丢弃,
+    // 市场安装路径就会退回"整域可注入",属于凭证边界的 fail open。
+    const scopedManifest = {
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'acme_api_key',
+            label: 'Acme API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.example.com'],
+              paths: ['/v1/convert'],
+              methods: ['POST'],
+            },
+          },
+        ],
+      },
+    };
+
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: scopedManifest.id,
+        name: scopedManifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-scoped',
+          version: scopedManifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest: scopedManifest,
+        },
+      },
+    });
+
+    const inject = response.plugin.currentRelease.manifest?.network?.secrets?.[0]?.inject;
+    expect(inject?.paths).toEqual(['/v1/convert']);
+    expect(inject?.methods).toEqual(['POST']);
+  });
+
   it('keeps availability separate from default installation', () => {
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,

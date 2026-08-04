@@ -345,16 +345,17 @@ export type GhostFetchMethod = (typeof GHOST_FETCH_METHODS)[number];
 
 export function isValidGhostSecretInjectPath(pathname: unknown): pathname is string {
   if (
-    typeof pathname !== 'string'
-    || pathname.length === 0
-    || pathname.length > GHOST_SECRET_INJECT_PATH_MAX_CHARS
-    || !pathname.startsWith('/')
-    || pathname.includes('?')
-    || pathname.includes('#')
-    || pathname.includes('\\')
-    || /[ -]/.test(pathname)
-    || /%(?:2f|5c)/i.test(pathname)
-    || /%(?![0-9a-f]{2})/i.test(pathname)
+    typeof pathname !== 'string' ||
+    pathname.length === 0 ||
+    pathname.length > GHOST_SECRET_INJECT_PATH_MAX_CHARS ||
+    !pathname.startsWith('/') ||
+    pathname.includes('?') ||
+    pathname.includes('#') ||
+    pathname.includes('\\') ||
+    // eslint-disable-next-line no-control-regex -- 控制字符是显式清洗目标
+    /[\x00-\x1f\x7f]/.test(pathname) ||
+    /%(?:2f|5c)/i.test(pathname) ||
+    /%(?![0-9a-f]{2})/i.test(pathname)
   ) {
     return false;
   }
@@ -1602,9 +1603,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         let injectPaths: string[] | undefined;
         if (inj.paths !== undefined) {
           if (
-            !Array.isArray(inj.paths)
-            || inj.paths.length === 0
-            || inj.paths.length > GHOST_SECRET_INJECT_MAX_PATHS
+            !Array.isArray(inj.paths) ||
+            inj.paths.length === 0 ||
+            inj.paths.length > GHOST_SECRET_INJECT_MAX_PATHS
           ) {
             return {
               ok: false,
@@ -1640,8 +1641,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           injectMethods = [];
           for (const method of inj.methods) {
             if (
-              typeof method !== 'string'
-              || !(GHOST_FETCH_METHODS as readonly string[]).includes(method)
+              typeof method !== 'string' ||
+              !(GHOST_FETCH_METHODS as readonly string[]).includes(method)
             ) {
               return {
                 ok: false,
