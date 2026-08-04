@@ -524,8 +524,20 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   AUTH_EXPIRED 时 fail-closed 报错并引导重新登录飞书。适用于"能力面
  *   直接复用产品飞书登录身份"的第一方服务;与 login-email 同族:用户
  *   不填值,禁 url / exchange / oauth,settingsHtml 豁免。
+ * - 'oidc-token'(2026-08-03 增补):值 = 主机为当前企业 Membership
+ *   按受信组织插件 provenance 按需签发的短时 Cindy Connection JWT;
+ *   插件和 Node Worker 都不能读取或保存令牌。必须固定注入
+ *   `Authorization: Bearer {value}` 并显式声明非空的精确 inject.hosts;
+ *   不允许 url / exchange / oauth / input,也不要求 settingsHtml。只有
+ *   organization scope 的插件可以通过 Plugin Market 发布该来源。
  */
-export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth', 'login-feishu-token'] as const;
+export const GHOST_SECRET_SOURCES = [
+  'user',
+  'login-email',
+  'oauth',
+  'login-feishu-token',
+  'oidc-token',
+] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
@@ -544,7 +556,7 @@ export interface GhostSecretDecl {
   key: string;
   /** 给用户看的名称(装入确认框展示)。 */
   label: string;
-  /** 凭证值来源;缺省 'user'(校验归一化:'user' 不落清单,只保留 'login-email')。 */
+  /** 凭证值来源;缺省 'user'(校验归一化:'user' 不落清单)。 */
   source?: GhostSecretSource;
   /** 可选提示(如"在 example.com/settings 生成")。 */
   hint?: string;
@@ -798,6 +810,11 @@ export interface GhostManifest {
    * 本地化(必须与 SKILL.md 逐字一致,见 GhostSkillItem)。
    */
   skill?: GhostSkillNeeds;
+}
+
+/** 判断已校验的 manifest 是否请求 Host 托管的企业身份凭证。 */
+export function ghostManifestUsesOidcToken(manifest: GhostManifest): boolean {
+  return manifest.network?.secrets?.some((secret) => secret.source === 'oidc-token') ?? false;
 }
 
 /** 判断值是否可作为 `ghost.json.id` 和跨平台安全的安装目录名。 */
@@ -1398,6 +1415,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (s.source === 'login-email') source = 'login-email';
           if (s.source === 'oauth') source = 'oauth';
           if (s.source === 'login-feishu-token') source = 'login-feishu-token';
+          if (s.source === 'oidc-token') source = 'oidc-token';
         }
         // 输入面字段已退役(2026-07-13 宿主凭证渲染整体退役):user 凭证
         // 一律意识 settingsHtml 收单。遗留 `input: "ghost"` 接受并忽略
@@ -1410,15 +1428,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           };
         }
         // login-email / login-feishu-token 同族:值取自主机登录态派生,用户
-        // 不填、没有输入面,禁 url / exchange,settingsHtml 豁免。
+        // 不填、没有输入面,禁 url / exchange,settingsHtml 豁免。oidc-token
+        // 同样由 Host 托管,但值来自当前组织 Membership 的 Connection JWT。
         const loginDerived = source === 'login-email' || source === 'login-feishu-token';
-        if (s.input === 'ghost' && loginDerived) {
+        const hostManaged = source === 'oidc-token';
+        if (s.input === 'ghost' && (loginDerived || hostManaged)) {
           return {
             ok: false,
-            reason: `source: ${source} 的凭证不允许标注 input: ghost(派生凭证没有输入,谈不上谁收单)`,
+            reason: `source: ${source} 的凭证不允许标注 input: ghost(Host 托管凭证没有输入,谈不上谁收单)`,
           };
         }
-        if (!loginDerived && raw.settingsHtml === undefined) {
+        if (!loginDerived && !hostManaged && raw.settingsHtml === undefined) {
           return {
             ok: false,
             reason:
@@ -1437,6 +1457,19 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           return {
             ok: false,
             reason: `network.secrets[].source 为 ${source} 时不允许声明 exchange(登录态凭证不外送交换端点)`,
+          };
+        }
+        if (hostManaged && s.url !== undefined) {
+          return {
+            ok: false,
+            reason: 'network.secrets[].source 为 oidc-token 时不允许声明 url(令牌由 Host 按需签发)',
+          };
+        }
+        if (hostManaged && s.exchange !== undefined) {
+          return {
+            ok: false,
+            reason:
+              'network.secrets[].source 为 oidc-token 时不允许声明 exchange(不允许把 Connection JWT 转交给第三方端点)',
           };
         }
         if (
@@ -1517,6 +1550,28 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               };
             }
             injectHosts.push(ihNorm);
+          }
+        }
+        if (hostManaged) {
+          if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
+            return {
+              ok: false,
+              reason:
+                'network.secrets[].source 为 oidc-token 时 inject 必须是 Authorization: Bearer {value}',
+            };
+          }
+          if (injectHosts === undefined || injectHosts.length === 0) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts',
+            };
+          }
+          if (injectHosts.some((host) => host.startsWith('*.'))) {
+            return {
+              ok: false,
+              reason:
+                'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名,不允许通配',
+            };
           }
         }
         // oauth(source: 'oauth' 时必填):主机托管 OAuth 授权详单。授权页与

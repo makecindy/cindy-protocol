@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SCHEMA_VERSION,
+  ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
   isValidGhostId,
   validateGhostManifest,
@@ -26,6 +27,135 @@ describe('Ghost manifest contract', () => {
   it('rejects invalid ids and schema versions', () => {
     expect(isValidGhostId('../escape')).toBe(false);
     expect(validateGhostManifest({ ...validManifest, schemaVersion: 1 }).ok).toBe(false);
+  });
+
+  it('accepts an oidc-token secret without a settings page and normalizes its exact host', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['API.EXAMPLE.COM'],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      manifest: expect.objectContaining({
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'cindy_identity',
+              label: 'Cindy organization identity',
+              source: 'oidc-token',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.example.com'],
+              },
+            },
+          ],
+        },
+      }),
+    });
+    expect(result.ok && ghostManifestUsesOidcToken(result.manifest)).toBe(true);
+    const baseline = validateGhostManifest(validManifest);
+    expect(baseline.ok && ghostManifestUsesOidcToken(baseline.manifest)).toBe(false);
+  });
+
+  it('rejects unsafe oidc-token declarations', () => {
+    const base = {
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'cindy_identity',
+            label: 'Cindy organization identity',
+            source: 'oidc-token',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.example.com'],
+            },
+          },
+        ],
+      },
+    };
+    const secret = (patch: Record<string, unknown> = {}, hosts: string[] = base.network.hosts) => ({
+      ...base,
+      network: {
+        ...base.network,
+        hosts,
+        secrets: [{ ...base.network.secrets[0], ...patch }],
+      },
+    });
+
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: { header: 'X-Identity', format: 'Bearer {value}', hosts: ['api.example.com'] },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: { header: 'Authorization', format: 'Basic {value}' },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    expect(
+      validateGhostManifest(
+        secret(
+          {
+            inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['*.example.com'] },
+          },
+          ['*.example.com'],
+        ),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许通配') });
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('显式声明非空 inject.hosts') });
+    expect(validateGhostManifest(secret({ url: 'https://api.example.com/keys' }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许声明 url'),
+    });
+    expect(validateGhostManifest(secret({ exchange: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许声明 exchange'),
+    });
+    expect(validateGhostManifest(secret({ oauth: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('oauth 仅允许在 source: oauth'),
+    });
+    expect(
+      validateGhostManifest(
+        secret({
+          input: 'ghost',
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
   });
 
   it('accepts and normalizes Plugin locale resource declarations', () => {

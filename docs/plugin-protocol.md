@@ -110,6 +110,45 @@ Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包�
 
 这是 schema v2 的可选、追加字段，不改变未声明该字段的现有插件。旧版发布服务器会因严格的 `node` 字段白名单而拒绝包含该字段的包；因此发布顺序必须是协议仓合并、plugin-server 升级并部署，然后再发布使用该字段的插件。旧版客户端同样会拒绝安装而不会降级为不安全的明文传参。
 
+### Host 托管的企业身份凭证
+
+组织插件可以声明 `network.secrets[].source: "oidc-token"`，请求 Cindy
+Desktop 为当前企业 Membership 按需签发短时 Connection JWT。令牌只在 Host
+的 Main 进程内存中使用，插件代码和 Node Worker 都不能读取、保存或转交令牌：
+
+```json
+{
+  "slots": ["network"],
+  "network": {
+    "hosts": ["api.example.com"],
+    "secrets": [
+      {
+        "key": "cindy_identity",
+        "label": "Cindy organization identity",
+        "source": "oidc-token",
+        "inject": {
+          "header": "Authorization",
+          "format": "Bearer {value}",
+          "hosts": ["api.example.com"]
+        }
+      }
+    ]
+  }
+}
+```
+
+该来源必须同时满足：
+
+- `inject.hosts` 必须显式非空，并且每项是 `network.hosts` 中的精确域名；不接受通配符；
+- `inject.header` 固定为 `Authorization`，`inject.format` 固定为 `Bearer {value}`；
+- 不得声明 `input`、`url`、`exchange` 或 `oauth`，也不要求 `settingsHtml`；
+- Plugin Server 只允许 `scope=organization` 的 Release 发布该来源；Public 和 Personal
+  Release 必须拒绝。
+
+这是 schema v2 的新增 manifest 能力，不改变未声明该来源的既有插件。旧版
+plugin-server 或 Desktop 不认识该来源时必须拒绝发布/安装，并保留已有安装；部署顺序
+应为先合并协议，再升级 plugin-server，最后发布支持正式 Market provenance 的 Desktop。
+
 ## 解析客户端 HTTP 响应
 
 HTTP 返回体必须先作为 `unknown` 解析，再交给对应解析器：
@@ -167,7 +206,7 @@ try {
 | `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。              |
 | `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
-`parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`，以及顶层 `name/description/author` 与当前 manifest 一致。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
+`parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`、顶层 `name/description/author` 与当前 manifest 一致，以及声明 `oidc-token` 的 manifest 只能属于 `organization` scope。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
 
 ## 版本
 
@@ -193,4 +232,5 @@ HTTP envelope 版本不支持时，客户端停止本轮远程对账并保留本
 
 ## 消费顺序
 
-本期由 plugin-server 先消费该包。Desktop 的 submodule pointer、依赖和 manifest re-export 在后续客户端接入任务中统一修改，不要求与本次服务端交付处于同一发布窗口。
+本期由 plugin-server 和 Desktop 共同消费该包。协议合并后，两个消费方仓库分别 bump
+submodule 指针并在各自 PR 中完成适配；不能让任一方长期停留在只认识旧 manifest 的版本。
