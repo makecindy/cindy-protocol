@@ -2,7 +2,7 @@
 
 [English](README.en.md) | **中文**
 
-客户端仓库与服务端仓库**共享的线上协议**(wire protocol)单一权威来源。两侧以 git submodule 挂载本仓库,并把 `packages/*` 纳入各自的 pnpm workspace。除特别说明外协议包以源码消费；`@cindy/model-access-protocol` 必须先构建为 JavaScript 与类型声明。
+客户端仓库与服务端仓库**共享的线上协议**(wire protocol)单一权威来源。两侧以 git submodule 挂载本仓库,并把 `packages/*` 纳入各自的 pnpm workspace(源码直发,无构建产物)。
 
 ## 准入规则
 
@@ -39,15 +39,9 @@ packages:
 
 依赖照常写 `"@cindy/slack-hook-protocol": "workspace:*"`。
 
-`@cindy/model-access-protocol` 是构建产物包。初始化 submodule 并安装依赖后，消费方
-必须在 typecheck、bundle 或生产部署之前执行：
-
-```bash
-pnpm --filter @cindy/model-access-protocol build
-```
-
-消费方的顶层构建脚本和容器构建必须显式保证这个顺序；不能依赖 `pnpm install`
-自动生成该包的 `dist`。
+所有协议包都是源码直发，本仓不产出构建产物。纯 Node 生产进程无法直接加载
+`node_modules` 下的 TypeScript，因此服务端消费方要在构建期把用到的协议包内联进
+自己的 bundle（`tsup` 的 `noExternal`）。
 
 ## 贡献
 

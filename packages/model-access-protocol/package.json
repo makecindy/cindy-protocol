@@ -4,26 +4,15 @@
   "private": true,
   "description": "Cindy model-access client/server model catalog wire contract. Zero runtime deps",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    },
-    "./types": {
-      "types": "./dist/types.d.ts",
-      "import": "./dist/types.js",
-      "default": "./dist/types.js"
-    }
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
-    "test": "pnpm run build && vitest run && node --no-experimental-strip-types -e \"import('@cindy/model-access-protocol')\""
+    "build": "tsc --noEmit",
+    "test": "vitest run"
   },
   "license": "Apache-2.0",
   "devDependencies": {

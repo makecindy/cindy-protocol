@@ -4,10 +4,8 @@
 
 The single source of truth for the **wire protocols shared** between the Cindy
 client and server repositories. Each side mounts this repository as a git
-submodule and includes `packages/*` in its own pnpm workspace. Protocol packages
-are consumed from source unless documented otherwise;
-`@cindy/model-access-protocol` must first be built to JavaScript and type
-declarations.
+submodule and includes `packages/*` in its own pnpm workspace (source-shipped,
+no build artifacts).
 
 ## Admission rule
 
@@ -51,17 +49,10 @@ packages:
 
 Then depend on the packages as usual: `"@cindy/slack-hook-protocol": "workspace:*"`.
 
-`@cindy/model-access-protocol` is a build-artifact package. After initializing
-the submodule and installing dependencies, consumers must run the following
-before typechecking, bundling, or producing a deployment:
-
-```bash
-pnpm --filter @cindy/model-access-protocol build
-```
-
-Top-level build scripts and container builds in consuming repositories must
-encode this ordering explicitly; do not rely on `pnpm install` to generate the
-package's `dist` directory.
+Every protocol package is source-shipped; this repository produces no build
+artifacts. A pure Node production process cannot load TypeScript from
+`node_modules`, so server-side consumers must inline the protocol packages they
+use into their own bundle at build time (`tsup`'s `noExternal`).
 
 ## Contributing
 

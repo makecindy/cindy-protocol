@@ -98,10 +98,14 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 - 旧客户端忽略整个可选段；新客户端遇到未知 registry 版本或非法内容时保留上一份
   有效 registry，并继续使用 bundled fallback。
 
-协议包构建为 `dist/*.js` 与 `dist/*.d.ts`，公开入口只指向构建产物。消费方在打包或
-部署 workspace 依赖前必须先执行 `@cindy/model-access-protocol` 的 `build`；纯 Node
-生产进程不得直接加载 `node_modules` 内的 TypeScript 源码。构建产物由消费方流水线
-生成，不提交到协议仓库。
+协议包与本仓其余协议包一致，以 TypeScript 源码直发：公开入口直指 `src/*.ts`，
+仓库内不产出也不提交构建产物。源码内部沿用显式 `.js` 扩展名（与 plugin-protocol、
+skill-protocol 一致），以满足消费方 `moduleResolution: node16` 的类型检查。
 
-源码内部使用显式 `.js` 扩展名，确保 TypeScript 按 NodeNext 编译后生成的 ESM 可由
-Node 直接加载。Metro/React Native 消费方同样使用构建后的零依赖 JavaScript 入口。
+纯 Node 生产进程不能直接加载 `node_modules` 下的 TypeScript，因此服务端消费方必须
+在构建期把本包内联进自己的 bundle（`tsup` 的 `noExternal`，与 device-link-server、
+plugin-server 同一做法），运行时形态仍是 `node dist/index.js`。
+
+客户端消费方由 Vite / Metro 直接吃源码。Metro 不会把 `./x.js` 回落到 `./x.ts`，
+因此 mobile 侧需在 `metro.config.js` 的 resolver 中覆盖本包（desktop 的 Vite 与
+vitest 自带该回落，无需配置）。
