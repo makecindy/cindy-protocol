@@ -389,6 +389,8 @@ describe('plugin delivery contract', () => {
     expect(withRemovals([{ ...removal, organizationId: null }])).toThrow(PluginProtocolError);
     expect(withRemovals([{ ...removal, scope: 'public' }])).toThrow(PluginProtocolError);
     expect(withRemovals([{ ...removal, action: 42 }])).toThrow(PluginProtocolError);
+    // action 的结构形状是 1–64 字符:超长按坏帧拒绝,不落入"未知取值跳过"分支。
+    expect(withRemovals([{ ...removal, action: 'x'.repeat(65) }])).toThrow(PluginProtocolError);
     // 动作未知但其余字段不合法的通告仍然整体拒绝:跳过只发生在结构校验通过之后。
     expect(withRemovals([{ ...removal, action: 'disable', removedAt: 'soon' }])).toThrow(
       PluginProtocolError,
