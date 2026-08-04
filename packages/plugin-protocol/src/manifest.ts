@@ -338,6 +338,33 @@ function ghostNetworkHostMatches(pattern: string, hostname: string): boolean {
   return hostname === pattern;
 }
 
+export const GHOST_SECRET_INJECT_MAX_PATHS = 16;
+export const GHOST_SECRET_INJECT_PATH_MAX_CHARS = 1024;
+export const GHOST_FETCH_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+export type GhostFetchMethod = (typeof GHOST_FETCH_METHODS)[number];
+
+export function isValidGhostSecretInjectPath(pathname: unknown): pathname is string {
+  if (
+    typeof pathname !== 'string'
+    || pathname.length === 0
+    || pathname.length > GHOST_SECRET_INJECT_PATH_MAX_CHARS
+    || !pathname.startsWith('/')
+    || pathname.includes('?')
+    || pathname.includes('#')
+    || pathname.includes('\\')
+    || /[ -]/.test(pathname)
+    || /%(?:2f|5c)/i.test(pathname)
+    || /%(?![0-9a-f]{2})/i.test(pathname)
+  ) {
+    return false;
+  }
+  try {
+    return new URL(pathname, 'https://ghost.invalid').pathname === pathname;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 凭证注入声明:该凭证以什么形态、进哪些域名的请求头。绑定在 secret 上
  * (而非独立 auth 模板)是刻意的——结构上保证"key 只流向它声明的域名",
@@ -349,6 +376,10 @@ export interface GhostSecretInjectDecl {
    * 缺省 = 详单里的全部域名。
    */
   hosts?: string[];
+  /** 精确 URL.pathname 白名单；缺省 = 该 host 下全部路径。 */
+  paths?: string[];
+  /** HTTP method 白名单；缺省 = 代理 fetch 支持的全部方法。 */
+  methods?: GhostFetchMethod[];
   /** 注入的请求头名(如 Authorization / X-Subscription-Token)。 */
   header: string;
   /** 头值模板:恰含一个 `{value}` 占位,其余为静态文本(如 `Bearer {value}`)。 */
@@ -1568,6 +1599,68 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             injectHosts.push(ihNorm);
           }
         }
+        let injectPaths: string[] | undefined;
+        if (inj.paths !== undefined) {
+          if (
+            !Array.isArray(inj.paths)
+            || inj.paths.length === 0
+            || inj.paths.length > GHOST_SECRET_INJECT_MAX_PATHS
+          ) {
+            return {
+              ok: false,
+              reason: `network.secrets[].inject.paths 必须是 1–${GHOST_SECRET_INJECT_MAX_PATHS} 条精确 pathname 的数组(或省略 = 全部路径)`,
+            };
+          }
+          injectPaths = [];
+          for (const path of inj.paths) {
+            if (!isValidGhostSecretInjectPath(path)) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.paths 含非法条目 ${JSON.stringify(path)}`,
+              };
+            }
+            if (injectPaths.includes(path)) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.paths 含重复条目 ${JSON.stringify(path)}`,
+              };
+            }
+            injectPaths.push(path);
+          }
+          injectPaths.sort();
+        }
+        let injectMethods: GhostFetchMethod[] | undefined;
+        if (inj.methods !== undefined) {
+          if (!Array.isArray(inj.methods) || inj.methods.length === 0) {
+            return {
+              ok: false,
+              reason: 'network.secrets[].inject.methods 必须是非空数组(或省略 = 全部支持的方法)',
+            };
+          }
+          injectMethods = [];
+          for (const method of inj.methods) {
+            if (
+              typeof method !== 'string'
+              || !(GHOST_FETCH_METHODS as readonly string[]).includes(method)
+            ) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.methods 含未知项 ${JSON.stringify(method)}(可用:${GHOST_FETCH_METHODS.join(' / ')})`,
+              };
+            }
+            const typed = method as GhostFetchMethod;
+            if (injectMethods.includes(typed)) {
+              return {
+                ok: false,
+                reason: `network.secrets[].inject.methods 含重复条目 ${JSON.stringify(method)}`,
+              };
+            }
+            injectMethods.push(typed);
+          }
+          injectMethods.sort(
+            (a, b) => GHOST_FETCH_METHODS.indexOf(a) - GHOST_FETCH_METHODS.indexOf(b),
+          );
+        }
         if (oidcManaged) {
           if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
             return {
@@ -2038,6 +2131,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             header: inj.header,
             format: inj.format,
             ...(injectHosts !== undefined ? { hosts: injectHosts } : {}),
+            ...(injectPaths !== undefined ? { paths: injectPaths } : {}),
+            ...(injectMethods !== undefined ? { methods: injectMethods } : {}),
           },
           ...(exchange !== undefined ? { exchange } : {}),
           ...(oauth !== undefined ? { oauth } : {}),

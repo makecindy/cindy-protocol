@@ -77,6 +77,52 @@ describe('Ghost manifest contract', () => {
     expect(baseline.ok && ghostManifestUsesOidcToken(baseline.manifest)).toBe(false);
   });
 
+  it('accepts and normalizes secret endpoint path/method allowlists', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{
+          key: 'api_key',
+          label: 'API Key',
+          inject: {
+            header: 'Authorization',
+            format: 'Bearer {value}',
+            paths: ['/v1/z', '/v1/convert'],
+            methods: ['POST', 'GET'],
+          },
+        }],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject).toEqual({
+      header: 'Authorization',
+      format: 'Bearer {value}',
+      paths: ['/v1/convert', '/v1/z'],
+      methods: ['GET', 'POST'],
+    });
+  });
+
+  it('rejects ambiguous endpoint paths and unsupported methods', () => {
+    const validateInject = (inject: Record<string, unknown>) => validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{ key: 'api_key', label: 'API Key', inject }],
+      },
+    });
+    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/a/../b'] }).ok).toBe(false);
+    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/%2fsecret'] }).ok).toBe(false);
+    expect(validateInject({ header: 'Authorization', format: 'Bearer {value}', methods: ['HEAD'] }).ok).toBe(false);
+  });
+
   it('rejects unsafe oidc-token declarations', () => {
     const base = {
       ...validManifest,
