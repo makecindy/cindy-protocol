@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_OAUTH_SCOPES_MAX,
   ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
   isValidGhostId,
@@ -156,6 +157,43 @@ describe('Ghost manifest contract', () => {
         }),
       ),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
+  });
+
+  it('accepts up to 48 OAuth scopes and rejects more', () => {
+    const withScopes = (count: number) =>
+      validateGhostManifest({
+        ...validManifest,
+        tools: undefined,
+        slots: ['network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['accounts.example.com'],
+          secrets: [
+            {
+              key: 'account',
+              label: 'Example account',
+              source: 'oauth',
+              inject: { header: 'Authorization', format: 'Bearer {value}' },
+              oauth: {
+                authorizeUrl: 'https://accounts.example.com/authorize',
+                tokenUrl: 'https://accounts.example.com/token',
+                scopes: Array.from({ length: count }, (_, index) => `scope:${index}`),
+              },
+            },
+          ],
+        },
+      });
+
+    expect(GHOST_OAUTH_SCOPES_MAX).toBe(48);
+    const accepted = withScopes(GHOST_OAUTH_SCOPES_MAX);
+    expect(accepted.ok).toBe(true);
+    expect(accepted.ok && accepted.manifest.network?.secrets?.[0]?.oauth?.scopes).toEqual(
+      Array.from({ length: GHOST_OAUTH_SCOPES_MAX }, (_, index) => `scope:${index}`),
+    );
+    expect(withScopes(GHOST_OAUTH_SCOPES_MAX + 1)).toEqual({
+      ok: false,
+      reason: 'network.secrets[].oauth.scopes 必须是 ≤48 条的数组',
+    });
   });
 
   it('accepts and normalizes Plugin locale resource declarations', () => {
