@@ -10,7 +10,8 @@
 1. **连接自报家门**:`hello`(desktop → server,声明工作区别名与可用 agent)/ `welcome` / `ping` / `pong`
 2. **派活**:`task.dispatch`(server → desktop)→ `task.ack`(立即三态应答)
 3. **干活**:无消息——铁律「同 externalKey 同 session」由 desktop 侧保证
-4. **交差**:`turn.end`(desktop → server,结果回传)
+4. **交差**:`turn.end`(desktop → server,结果回传)；协商 `turn-delivery-v1` 后由
+   `turn.delivery`(server → desktop)回报服务端接管、重试和渠道发布结果
 
 v2 在版本号不变的前提下增量扩展(见 §3 兼容策略):
 
@@ -69,7 +70,9 @@ interface HookEnvelope<TType, TPayload> {
 ## 4. 可靠性语义
 
 - **requestId 幂等**:任务重投不重跑,desktop 只回放上次 ack。
-- **断线重连**:server 重投未 ack 的任务;desktop 补发未送达的 `turn.end`。
+- **断线重连**:server 重投未 ack 的任务;desktop 补发未送达的 `turn.end`。双方协商
+  `turn-delivery-v1` 时，desktop 以 `turn.delivery(state=accepted)` 作为 server 已持久
+  接管结果与重试责任的边界；socket 本地写成功不等于渠道已发布。
 - **latest-wins 帧**(`turn.progress` / `prefs.state` 主动推送):丢帧无害,每帧整体替换,不拼接不累积。
 - **幂等收口**:`task.cancel` 对未知 requestId、`session.archive` 对不存在的会话、`interaction.decision` 对已收口交互——全部静默忽略。
 
@@ -85,14 +88,30 @@ interface HookEnvelope<TType, TPayload> {
 
 ### 阶段 2/4/7/9 任务生命周期
 
-| 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                               |
-| --------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task.dispatch` | server → desktop | 派发任务。`requestId`、`externalKey`、`workspace`(sessionId 为 null 时必填)、`sessionId`(接管时非 null)、`prompt`、`options`(model/permissionMode/agentKind/effort 全可空,空落 desktop 默认)、`attachments`(base64 内联图片)、`source`(IM 来源元数据:平台、频道名、thread 上下文、用户原文)                   |
-| `task.ack`      | desktop → server | dispatch 立即应答,三态 `accepted / queued / rejected`。联动约束(parse 强制):`reason` 仅 rejected 非 null;`queuePosition` 仅 queued 非 null;`sessionId` 在 accepted/queued 为目标会话、rejected 为 null。拒绝原因:`unknown_workspace` / `workspace_not_allowed` / `session_not_found` / `disabled` / `invalid` |
-| `turn.progress` | desktop → server | 执行中渲染快照(完整 markdown,整帧替换)。desktop 负责节流(约 1.5s/帧)与长度控制                                                                                                                                                                                                                                |
-| `task.cancel`   | server → desktop | 中断在跑任务(`/stop`)。desktop 中断对应 turn,以 `turn.end(cancelled)` 收口                                                                                                                                                                                                                                    |
-| `turn.end`      | desktop → server | 任务收口。`status`:`ok / error / cancelled`(联动:ok 时 errorMessage 必须 null,error 时必须非空);`finalText`;`usage.durationMs`(拿不到就 null,不编造);`attachments`(agent 产出的图片/文件,出站与入站对称复用 TaskAttachment)                                                                                   |
-| `turn.reopen`   | desktop → server | (阶段 18)已收口任务在桌面端被用户续跑,把后续进展接回渠道那条消息。`requestId`(续跑轮的**新** id)、`reopenOf`(被续跑那轮的 id,parse 强制两者不相等)、`externalKey`、`sessionId`、`reason`(开放集合,当前只有 `user-continued`)。详见阶段 18                                                                     |
+| 消息            | 方向             | 用途 / 关键字段                                                                                                                                                                                                                                                                                                                                       |
+| --------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task.dispatch` | server → desktop | 派发任务。`requestId`、`externalKey`、`workspace`(sessionId 为 null 时必填)、`sessionId`(接管时非 null)、`prompt`、`options`(model/permissionMode/agentKind/effort 全可空,空落 desktop 默认)、`attachments`(base64 内联图片)、`source`(IM 来源元数据:平台、频道名、thread 上下文、用户原文)                                                           |
+| `task.ack`      | desktop → server | dispatch 立即应答,三态 `accepted / queued / rejected`。联动约束(parse 强制):`reason` 仅 rejected 非 null;`queuePosition` 仅 queued 非 null;`sessionId` 在 accepted/queued 为目标会话、rejected 为 null。拒绝原因:`unknown_workspace` / `workspace_not_allowed` / `session_not_found` / `disabled` / `invalid`                                         |
+| `turn.progress` | desktop → server | 执行中渲染快照(完整 markdown,整帧替换)。desktop 负责节流(约 1.5s/帧)与长度控制                                                                                                                                                                                                                                                                        |
+| `task.cancel`   | server → desktop | 中断在跑任务(`/stop`)。desktop 中断对应 turn,以 `turn.end(cancelled)` 收口                                                                                                                                                                                                                                                                            |
+| `turn.end`      | desktop → server | 任务收口。`status`:`ok / error / cancelled`(联动:ok 时 errorMessage 必须 null,error 时必须非空);`finalText`;`usage.durationMs`(拿不到就 null,不编造);`attachments`(agent 产出的图片/文件,出站与入站对称复用 TaskAttachment)                                                                                                                           |
+| `turn.delivery` | server → desktop | 协商 `turn-delivery-v1` 后回报普通 `turn.end` 的交付状态：`accepted`=server 已接管结果及重试责任，`retrying`=渠道发布失败但会按 `retryAt` 自动重试，`delivered`=渠道终态动作已完成，`failed`=停止重试。带 `attempt`；retrying/failed 的 `error` 仅含安全结构化 code/message/retryable，不得透传 provider 原始响应、凭证或用户内容。续跑轮不使用本帧。 |
+| `turn.reopen`   | desktop → server | (阶段 18)已收口任务在桌面端被用户续跑,把后续进展接回渠道那条消息。`requestId`(续跑轮的**新** id)、`reopenOf`(被续跑那轮的 id,parse 强制两者不相等)、`externalKey`、`sessionId`、`reason`(开放集合,当前只有 `user-continued`)。详见阶段 18                                                                                                             |
+
+### turn.delivery 可靠性与兼容
+
+- 双方必须在 `hello.features` / `welcome.features` 同时声明
+  `HOOK_FEATURE_TURN_DELIVERY='turn-delivery-v1'` 后才启用。老 server 继续按既有
+  fire-and-forget 行为处理；新 server 不向未声明能力的老 desktop 推未知帧。
+- `accepted` 不是“WebSocket 收到”或“写入本机 socket”，而是最终结果已进入 server
+  的持久交接/恢复边界；从这一刻起重试归 server。desktop 在 accepted 前可按同一
+  `requestId` 重放完全相同的普通 `turn.end`，server 必须幂等并回放最新状态。
+- `retrying` 的 `retryAt` 与 `error.retryable=true` 必填；`accepted` / `delivered` 不带
+  error；`failed` 带安全结构化 error 且 `retryAt=null`。provider 的原始响应正文不得上 wire。
+- `delivered` / `failed` 是渠道侧终态。服务端若要保证断线后仍可查询或回放终态，需保留
+  有界 TTL 的 delivery receipt；仅在线 best-effort 发一帧不构成可靠发布确认。
+- `turn.reopen` 续跑保持既有“断连即终局”语义，不进入普通 turn.end 的 ACK/重放链，
+  避免迟到补发覆盖 server 已完成的断连收口。
 
 ### 阶段 5 绑定(Sign in with Slack OIDC)
 

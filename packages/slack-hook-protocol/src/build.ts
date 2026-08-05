@@ -56,6 +56,7 @@ import {
   type HookToolRequestMessage,
   type HookToolResponseMessage,
   type HookTurnEndMessage,
+  type HookTurnDeliveryMessage,
   type HookTurnProgressMessage,
   type HookTurnReopenMessage,
   type HookWelcomeMessage,
@@ -86,6 +87,7 @@ import {
   type ToolRequestPayload,
   type ToolResponsePayload,
   type TurnEndPayload,
+  type TurnDeliveryPayload,
   type TurnProgressPayload,
   type TurnReopenPayload,
   type WelcomePayload,
@@ -141,6 +143,10 @@ export function makeTaskAck(payload: TaskAckPayload): HookTaskAckMessage {
 
 export function makeTurnEnd(payload: TurnEndPayload): HookTurnEndMessage {
   return envelope('turn.end', payload);
+}
+
+export function makeTurnDelivery(payload: TurnDeliveryPayload): HookTurnDeliveryMessage {
+  return envelope('turn.delivery', payload);
 }
 
 export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgressMessage {

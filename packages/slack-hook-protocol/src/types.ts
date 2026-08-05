@@ -214,6 +214,7 @@ export const HOOK_MESSAGE_TYPES = [
   'task.dispatch',
   'task.ack',
   'turn.end',
+  'turn.delivery',
   'turn.progress',
   'turn.reopen',
   'bind.start',
@@ -503,6 +504,35 @@ export interface TurnEndPayload {
    * 旧 server 收到未知字段静默忽略(校验器只查已知字段), 向后兼容。
    */
   attachments?: TaskAttachment[];
+}
+
+/**
+ * turn.delivery(server -> desktop): server 对普通 turn.end 的两阶段交付回执。
+ *
+ * accepted 表示 server 已经接管最终结果及其重试责任；delivered 表示渠道侧
+ * 终态动作已完成；failed 表示 server 已停止重试。desktop 只有在双方协商
+ * HOOK_FEATURE_TURN_DELIVERY 后才等待本帧，老 server 继续沿用 fire-and-forget。
+ */
+export const TURN_DELIVERY_STATES = ['accepted', 'retrying', 'delivered', 'failed'] as const;
+export type TurnDeliveryState = (typeof TURN_DELIVERY_STATES)[number];
+
+/** retrying / failed 回执的安全、结构化错误；不得携带上游响应体、凭证或用户内容。 */
+export interface TurnDeliveryError {
+  code: string;
+  message: string;
+  /** 原样重放同一个 turn.end 是否仍可能恢复；false 时 desktop 只提示，不重跑 Agent。 */
+  retryable: boolean;
+}
+
+export interface TurnDeliveryPayload {
+  requestId: string;
+  state: TurnDeliveryState;
+  /** 已发生的渠道发布尝试次数；accepted 为 0，其余状态至少为 1。 */
+  attempt: number;
+  /** 仅 retrying 为正的安全整数，表示 server 计划的下次尝试时刻(unix ms)。 */
+  retryAt: number | null;
+  /** retrying / failed 非 null；accepted / delivered 恒为 null，failed 的 retryable 必须为 false。 */
+  error: TurnDeliveryError | null;
 }
 
 // ── 阶段 9(v2): 执行进度 ────────────────────────────────────────────────────
@@ -1262,6 +1292,13 @@ export interface LifecyclePreferencePayload {
 export const HOOK_FEATURE_TURN_REOPEN = 'turn-reopen-v1';
 
 /**
+ * 双向能力标识：server 会在收到普通 turn.end 后回 turn.delivery，并以
+ * accepted 明确接管重试责任。续跑轮仍遵循 turn-reopen 的“断连即终局”，
+ * 不进入本回执与重放链路。
+ */
+export const HOOK_FEATURE_TURN_DELIVERY = 'turn-delivery-v1';
+
+/**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
  * workspaces 清单首位(绑定到它的任务以无项目目录的对话模式运行), 真实
  * 目录别名不许撞名(desktop 侧校验)。server 据此识别伪目录: 清单里只剩
@@ -1405,6 +1442,7 @@ export type HookPongMessage = HookEnvelope<'pong', PongPayload>;
 export type HookTaskDispatchMessage = HookEnvelope<'task.dispatch', TaskDispatchPayload>;
 export type HookTaskAckMessage = HookEnvelope<'task.ack', TaskAckPayload>;
 export type HookTurnEndMessage = HookEnvelope<'turn.end', TurnEndPayload>;
+export type HookTurnDeliveryMessage = HookEnvelope<'turn.delivery', TurnDeliveryPayload>;
 export type HookTurnProgressMessage = HookEnvelope<'turn.progress', TurnProgressPayload>;
 export type HookTurnReopenMessage = HookEnvelope<'turn.reopen', TurnReopenPayload>;
 export type HookBindStartMessage = HookEnvelope<'bind.start', BindStartPayload>;
@@ -1491,6 +1529,7 @@ export type HookMessage =
   | HookTaskDispatchMessage
   | HookTaskAckMessage
   | HookTurnEndMessage
+  | HookTurnDeliveryMessage
   | HookTurnProgressMessage
   | HookTurnReopenMessage
   | HookBindStartMessage
