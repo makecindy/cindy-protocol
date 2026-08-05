@@ -705,7 +705,7 @@ describe('model access schema v2', () => {
     const providerReported = {
       ...requestModel.providerReported!,
       name: '   ',
-      description: '',
+      description: ' '.repeat(2_001),
       family: '\t',
       group: '',
       releaseDate: ' ',

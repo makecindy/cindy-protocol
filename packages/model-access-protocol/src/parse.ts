@@ -562,7 +562,11 @@ function providerReportedError(value: unknown, path: string): string | null {
     ['releaseDate', 64],
   ] as const) {
     if (value[key] === undefined) continue;
-    error = optionalStringError(value[key], `${path}.${key}`, max);
+    const text = value[key];
+    // Blank provider hints are normalized away after validation. Ignore their raw length here so
+    // a padded placeholder cannot reject an otherwise useful model batch.
+    if (typeof text === 'string' && text.trim().length === 0) continue;
+    error = optionalStringError(text, `${path}.${key}`, max);
     if (error) return error;
   }
   error = optionalChatModeError(value.mode, `${path}.mode`);
