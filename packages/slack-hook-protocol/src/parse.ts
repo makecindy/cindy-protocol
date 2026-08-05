@@ -350,19 +350,24 @@ function validateTurnDelivery(p: Record<string, unknown>): string | null {
   if (!TURN_DELIVERY_STATES.includes(p.state as never)) {
     return `turn.delivery.state must be one of: ${TURN_DELIVERY_STATES.join(', ')}`;
   }
-  if (typeof p.attempt !== 'number' || !Number.isInteger(p.attempt) || p.attempt < 0) {
-    return 'turn.delivery.attempt must be a non-negative integer';
-  }
-  if (
-    p.retryAt !== null &&
-    (typeof p.retryAt !== 'number' || !Number.isFinite(p.retryAt) || p.retryAt < 0)
-  ) {
-    return 'turn.delivery.retryAt must be a non-negative finite number or null';
-  }
   const retrying = p.state === 'retrying';
+  const delivered = p.state === 'delivered';
   const failed = p.state === 'failed';
-  if (retrying !== (p.retryAt !== null)) {
-    return 'turn.delivery.retryAt must be non-null only when state is retrying';
+  if (typeof p.attempt !== 'number' || !Number.isSafeInteger(p.attempt) || p.attempt < 0) {
+    return 'turn.delivery.attempt must be a non-negative safe integer';
+  }
+  if (p.state === 'accepted' && p.attempt !== 0) {
+    return 'turn.delivery.attempt must be 0 when state is accepted';
+  }
+  if ((retrying || delivered || failed) && p.attempt < 1) {
+    return `turn.delivery.attempt must be at least 1 when state is ${String(p.state)}`;
+  }
+  if (retrying) {
+    if (typeof p.retryAt !== 'number' || !Number.isSafeInteger(p.retryAt) || p.retryAt <= 0) {
+      return 'turn.delivery.retryAt must be a positive safe integer when state is retrying';
+    }
+  } else if (p.retryAt !== null) {
+    return 'turn.delivery.retryAt must be null when state is not retrying';
   }
   if (!retrying && !failed) {
     return p.error === null
@@ -381,8 +386,16 @@ function validateTurnDelivery(p: Record<string, unknown>): string | null {
   if (typeof p.error.retryable !== 'boolean') {
     return 'turn.delivery.error.retryable must be a boolean';
   }
+  const allowedErrorKeys = new Set(['code', 'message', 'retryable']);
+  const unexpectedErrorKey = Object.keys(p.error).find((key) => !allowedErrorKeys.has(key));
+  if (unexpectedErrorKey !== undefined) {
+    return `turn.delivery.error.${unexpectedErrorKey} is not allowed`;
+  }
   if (retrying && p.error.retryable !== true) {
     return 'turn.delivery.error.retryable must be true when state is retrying';
+  }
+  if (failed && p.error.retryable !== false) {
+    return 'turn.delivery.error.retryable must be false when state is failed';
   }
   return null;
 }

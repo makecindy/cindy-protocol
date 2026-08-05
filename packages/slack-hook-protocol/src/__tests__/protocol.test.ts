@@ -493,6 +493,17 @@ describe('turn.end 状态联动约束', () => {
 describe('turn.delivery 状态联动约束', () => {
   const valid = makeTurnDelivery(VALID_TURN_DELIVERY_ACCEPTED);
 
+  const validRetrying = {
+    ...valid,
+    payload: {
+      ...valid.payload,
+      state: 'retrying' as const,
+      attempt: 1,
+      retryAt: 1_800_000_000_000,
+      error: { code: 'X', message: 'x', retryable: true },
+    },
+  };
+
   it('accepted / delivered 不带 error 或 retryAt', () => {
     expectReject(
       {
@@ -508,13 +519,17 @@ describe('turn.delivery 状态联动约束', () => {
   });
 
   it('retrying 必须带可重试错误和 retryAt', () => {
-    expectReject({ ...valid, payload: { ...valid.payload, state: 'retrying' } }, 'retryAt');
+    expectReject(
+      { ...valid, payload: { ...valid.payload, state: 'retrying', attempt: 1 } },
+      'retryAt',
+    );
     expectReject(
       {
         ...valid,
         payload: {
           ...valid.payload,
           state: 'retrying',
+          attempt: 1,
           retryAt: 1_800_000_000_000,
           error: { code: 'X', message: 'x', retryable: false },
         },
@@ -523,12 +538,80 @@ describe('turn.delivery 状态联动约束', () => {
     );
   });
 
-  it('failed 必须带结构化错误，attempt 必须为非负整数', () => {
+  it('attempt 必须与状态联动', () => {
     expectReject(
-      { ...valid, payload: { ...valid.payload, state: 'failed' } },
+      { ...valid, payload: { ...valid.payload, attempt: 1 } },
+      'attempt must be 0 when state is accepted',
+    );
+    expectReject(
+      { ...validRetrying, payload: { ...validRetrying.payload, attempt: 0 } },
+      'attempt must be at least 1 when state is retrying',
+    );
+    expectReject(
+      {
+        ...valid,
+        payload: { ...valid.payload, state: 'delivered', attempt: 0 },
+      },
+      'attempt must be at least 1 when state is delivered',
+    );
+    expectReject(
+      {
+        ...valid,
+        payload: {
+          ...valid.payload,
+          state: 'failed',
+          attempt: 0,
+          error: { code: 'X', message: 'x', retryable: false },
+        },
+      },
+      'attempt must be at least 1 when state is failed',
+    );
+    expectReject(
+      { ...valid, payload: { ...valid.payload, attempt: Number.MAX_SAFE_INTEGER + 1 } },
+      'safe integer',
+    );
+  });
+
+  it('retryAt 必须是 retrying 状态的正安全整数', () => {
+    for (const retryAt of [1.5, Number.MAX_SAFE_INTEGER + 1, 0, -1]) {
+      expectReject(
+        { ...validRetrying, payload: { ...validRetrying.payload, retryAt } },
+        'positive safe integer',
+      );
+    }
+  });
+
+  it('failed 必须带不可重试的结构化错误', () => {
+    expectReject(
+      { ...valid, payload: { ...valid.payload, state: 'failed', attempt: 1 } },
       'error must be an object',
     );
     expectReject({ ...valid, payload: { ...valid.payload, attempt: 1.5 } }, 'attempt');
+    expectReject(
+      {
+        ...valid,
+        payload: {
+          ...valid.payload,
+          state: 'failed',
+          attempt: 1,
+          error: { code: 'X', message: 'x', retryable: true },
+        },
+      },
+      'retryable must be false',
+    );
+  });
+
+  it('error 只允许安全结构化字段', () => {
+    expectReject(
+      {
+        ...validRetrying,
+        payload: {
+          ...validRetrying.payload,
+          error: { ...validRetrying.payload.error, providerResponse: 'secret' },
+        },
+      },
+      'providerResponse is not allowed',
+    );
   });
 });
 

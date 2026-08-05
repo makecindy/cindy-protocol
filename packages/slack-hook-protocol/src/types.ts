@@ -527,11 +527,11 @@ export interface TurnDeliveryError {
 export interface TurnDeliveryPayload {
   requestId: string;
   state: TurnDeliveryState;
-  /** 已发生的渠道发布尝试次数；accepted 为 0。 */
+  /** 已发生的渠道发布尝试次数；accepted 为 0，其余状态至少为 1。 */
   attempt: number;
-  /** 仅 retrying 非 null，表示 server 计划的下次尝试时刻(unix ms)。 */
+  /** 仅 retrying 为正的安全整数，表示 server 计划的下次尝试时刻(unix ms)。 */
   retryAt: number | null;
-  /** retrying / failed 非 null；accepted / delivered 恒为 null。 */
+  /** retrying / failed 非 null；accepted / delivered 恒为 null，failed 的 retryable 必须为 false。 */
   error: TurnDeliveryError | null;
 }
 
