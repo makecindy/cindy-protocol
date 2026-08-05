@@ -53,6 +53,16 @@ const manifest: GhostManifest = result.manifest;
 
 成功结果是只包含协议已知字段的规范化对象；`kind` 等有缺省语义的字段会被补齐。不要在校验前把 `unknown` 强转为 `GhostManifest`，也不要在服务端或 Desktop 另写一套 manifest 校验规则。
 
+### OAuth scope 数量上限
+
+`network.secrets[].oauth.scopes` 最多包含 48 条；第 49 条会被
+`validateGhostManifest` 拒绝。每条 scope 仍必须是 1–200 字符、不含空白的
+唯一字符串，本变更不改变单条校验或重复项规则。
+
+这是 schema v2 的宽松校验变更，不需要提升 manifest 版本。新版 plugin-server
+可以发布 33–48 条 scope 的包；仍使用旧协议校验器的 Desktop 会拒绝安装这些包
+并保留现有安装，因此应先升级客户端，再分发超过 32 条 scope 的 Plugin。
+
 ### Manifest 本地化资源
 
 Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包内 JSON 资源：
