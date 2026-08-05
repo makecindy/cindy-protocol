@@ -14,6 +14,13 @@ accounts:
   levels, and Fast support;
 - public provider reference prices with effective dates and traceable sources.
 
+Schema v2 additionally allows `newSessionDefault` as Cindy's catalog-level
+recommendation for the initial model of a new conversation, scoped by agent
+harness. It is global catalog policy, not an account preference or a live
+availability claim. A client applies it only among models that are currently
+available and visible, and it never overrides an explicit user selection or an
+already-running session.
+
 `updatedAt` is a canonical UTC ISO timestamp in `Date#toISOString()` form.
 For one route, reference-price entries with the same currency and variant must
 not overlap in both their effective-date interval and input-token interval.
@@ -91,9 +98,30 @@ is published as the desired complete content with a later `updatedAt`
 revision. The package exports `modelRegistryCanonicalJson` so client and server
 guards use the same normalization.
 
+A schema-version change changes the canonical snapshot content and therefore
+MUST publish a later `updatedAt`; a v1 and v2 snapshot must never reuse the same
+revision even when their model entries are otherwise equivalent.
+
+## Schema versions
+
+- **v1** is the original strict Registry shape and does not allow
+  `newSessionDefault`.
+- **v2** adds optional `ModelRegistryEntry.newSessionDefault`. When present it
+  must be a unique, non-empty array of supported Cindy agents, and every listed
+  agent must occur on at least one route of that entry. It is independent of
+  `sortOrder` (picker ordering) and `defaultEnabled` (default visibility). If
+  more than one available and visible model is marked for an agent, clients
+  prefer the one with the lowest `sortOrder` and use stable catalog order as the
+  final tie-breaker.
+
+The current parser accepts both v1 and v2 and applies a separate strict field
+allowlist to each version. It rejects unknown versions instead of partially
+interpreting them. This dual-reader behavior lets consumers deploy before a
+publisher switches a Registry snapshot from v1 to v2.
+
 ## Change gate
 
-The version 1 parser rejects every field outside its explicit allowlist. Adding
+Each version parser rejects every field outside its explicit allowlist. Adding
 or repurposing a field therefore requires all of the following:
 
 1. update the protocol types, strict parser, and contract tests together;

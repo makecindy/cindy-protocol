@@ -4,6 +4,7 @@ import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
+  MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   modelRegistryCanonicalJson,
@@ -14,7 +15,8 @@ import {
   parseResolveResponse,
   type ListModelsResponse,
   type ListModelsResponseV2,
-  type ModelRegistry,
+  type ModelRegistryV1,
+  type ModelRegistryV2,
   type ResolveRequest,
   type ResolveResponse,
   type ResolvedModel,
@@ -47,7 +49,7 @@ const VALID_RESPONSE: ListModelsResponse = {
   ],
 };
 
-const VALID_REGISTRY: ModelRegistry = {
+const VALID_REGISTRY: ModelRegistryV2 = {
   schemaVersion: MODEL_REGISTRY_SCHEMA_VERSION,
   updatedAt: '2026-07-31T00:00:00.000Z',
   models: [
@@ -84,6 +86,12 @@ const VALID_REGISTRY: ModelRegistry = {
       ],
     },
   ],
+};
+
+const VALID_REGISTRY_V1: ModelRegistryV1 = {
+  schemaVersion: MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
+  updatedAt: VALID_REGISTRY.updatedAt,
+  models: VALID_REGISTRY.models.map(({ newSessionDefault: _newSessionDefault, ...entry }) => entry),
 };
 
 function expectReject(value: unknown, path: string): void {
@@ -194,6 +202,8 @@ describe('public model registry contract', () => {
   it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
     const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
     expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
+    const v1Wire = JSON.parse(JSON.stringify(VALID_REGISTRY_V1));
+    expect(parseModelRegistry(v1Wire)).toEqual({ ok: true, value: VALID_REGISTRY_V1 });
   });
 
   it('rejects client provenance and every other field outside the versioned schema', () => {
@@ -273,7 +283,7 @@ describe('public model registry contract', () => {
   });
 
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
-    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 2 }, 'modelRegistry.schemaVersion');
+    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 3 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(
       { ...VALID_REGISTRY, models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]] },
       'modelRegistry.models[1].id',
@@ -394,16 +404,17 @@ describe('public model registry contract', () => {
     );
   });
 
-  it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
+  it('continues to parse the unchanged materialization-complete v1 wire', () => {
     // The exact shape a policy-based client requires before deriving a
     // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
     // availability"): explicit status + self-consistent capability set +
     // per-agent divergence. This policy consumes the existing v1 shape
     // without a schema bump; future field additions still follow the
     // Change gate.
-    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
+    expect(MODEL_REGISTRY_LEGACY_SCHEMA_VERSION).toBe(1);
+    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(2);
     const wire = {
-      ...VALID_REGISTRY,
+      ...VALID_REGISTRY_V1,
       models: [
         {
           ...VALID_REGISTRY.models[0],
@@ -420,6 +431,47 @@ describe('public model registry contract', () => {
       ],
     };
     expect(parseModelRegistry(JSON.parse(JSON.stringify(wire))).ok).toBe(true);
+  });
+
+  it('versions newSessionDefault in v2 and validates its agent routing contract', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    const marked = {
+      ...VALID_REGISTRY,
+      models: [{ ...entry, newSessionDefault: ['codex'] }],
+    };
+    expect(parseModelRegistry(JSON.parse(JSON.stringify(marked)))).toEqual({
+      ok: true,
+      value: marked,
+    });
+
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY_V1,
+        models: [{ ...VALID_REGISTRY_V1.models[0]!, newSessionDefault: ['codex'] }],
+      },
+      'modelRegistry.models[0].newSessionDefault',
+    );
+
+    for (const newSessionDefault of [[], ['codex', 'codex'], ['other']]) {
+      expectRegistryReject(
+        { ...VALID_REGISTRY, models: [{ ...entry, newSessionDefault }] },
+        'modelRegistry.models[0].newSessionDefault',
+      );
+    }
+
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [
+          {
+            ...entry,
+            routes: [{ ...entry.routes[0]!, agents: ['claude-code'] }],
+            newSessionDefault: ['codex'],
+          },
+        ],
+      },
+      'modelRegistry.models[0].newSessionDefault.codex',
+    );
   });
 
   it.each(MODEL_REGISTRY_STATUSES)('accepts the %s lifecycle status', (status) => {
@@ -586,6 +638,15 @@ describe('model access schema v2', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('contextWindow');
+
+    for (const sortOrder of ['first', Number.NaN, Number.POSITIVE_INFINITY]) {
+      const malformedSortOrder = parseResolveResponse({
+        ...response,
+        entries: [{ ...response.entries[0]!, models: [{ ...resolvedModel, sortOrder }] }],
+      });
+      expect(malformedSortOrder.ok).toBe(false);
+      if (!malformedSortOrder.ok) expect(malformedSortOrder.error).toContain('sortOrder');
+    }
   });
 
   it('parses the additive ListModels v2 envelope, including an empty list', () => {
@@ -599,7 +660,11 @@ describe('model access schema v2', () => {
           mode: 'chat',
           modalities: { input: ['text'], output: ['text'] },
           capabilities: { reasoning: true },
-          provenance: 'knowledge-base',
+          newSessionDefault: ['codex'],
+          provenance: {
+            contextWindow: 'provider',
+            capabilities: 'knowledge-base',
+          },
         },
       ],
     };
@@ -611,6 +676,13 @@ describe('model access schema v2', () => {
       ok: true,
       value: { schemaVersion: 2, models: [] },
     });
+
+    const unsupportedDefault = parseListModelsResponseV2({
+      ...response,
+      models: [{ ...response.models[0]!, agents: ['claude-code'], newSessionDefault: ['codex'] }],
+    });
+    expect(unsupportedDefault.ok).toBe(false);
+    if (!unsupportedDefault.ok) expect(unsupportedDefault.error).toContain('newSessionDefault');
   });
 
   it('rejects unsupported agents, duplicate provider entries, and invalid provenance', () => {

@@ -6,6 +6,7 @@ import {
   MODEL_ACCESS_PROVENANCES,
   MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
   MODEL_PRICE_VARIANTS,
+  MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
@@ -63,7 +64,7 @@ const PRICING_FIELDS = [
 ] as const;
 
 const MODEL_REGISTRY_FIELDS = ['schemaVersion', 'updatedAt', 'models'] as const;
-const MODEL_REGISTRY_ENTRY_FIELDS = [
+const MODEL_REGISTRY_ENTRY_V1_FIELDS = [
   'id',
   'name',
   'routes',
@@ -78,6 +79,9 @@ const MODEL_REGISTRY_ENTRY_FIELDS = [
   'supportsFastMode',
   'defaultEnabled',
   'perAgent',
+] as const;
+const MODEL_REGISTRY_ENTRY_V2_FIELDS = [
+  ...MODEL_REGISTRY_ENTRY_V1_FIELDS,
   'newSessionDefault',
 ] as const;
 const MODEL_REGISTRY_ROUTE_FIELDS = ['providerId', 'modelId', 'agents', 'referencePrices'] as const;
@@ -469,6 +473,8 @@ function resolvedModelError(value: unknown, path: string): string | null {
   if (error) return error;
   error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
   if (error) return error;
+  error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
+  if (error) return error;
   error = effortListError(value.efforts, `${path}.efforts`);
   if (error) return error;
   if (!Array.isArray(value.efforts)) return `${path}.efforts must be an array`;
@@ -641,6 +647,12 @@ function v2ModelIncrementalError(value: unknown, path: string): string | null {
   ) {
     return `${path}.status must be active, alpha, or deprecated when present`;
   }
+  const newSessionDefaultErrorMessage = newSessionDefaultError(
+    value.newSessionDefault,
+    `${path}.newSessionDefault`,
+    new Set(value.agents as ModelAgent[]),
+  );
+  if (newSessionDefaultErrorMessage) return newSessionDefaultErrorMessage;
   if (value.provenance !== undefined && !isModelProvenanceValue(value.provenance)) {
     return `${path}.provenance must be a supported provenance value or per-field provenance map when present`;
   }
@@ -801,9 +813,41 @@ function registryRouteError(value: unknown, path: string): string | null {
   return null;
 }
 
-function registryEntryError(value: unknown, path: string): string | null {
+function newSessionDefaultError(
+  value: unknown,
+  path: string,
+  supportedAgents: ReadonlySet<ModelAgent>,
+): string | null {
+  if (value === undefined) return null;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((agent) => !isModelAgent(agent)) ||
+    new Set(value).size !== value.length
+  ) {
+    return `${path} must be a unique non-empty array of supported agents`;
+  }
+  for (const agent of value as ModelAgent[]) {
+    if (!supportedAgents.has(agent)) {
+      return `${path}.${agent} must be supported by the model`;
+    }
+  }
+  return null;
+}
+
+function registryEntryError(
+  value: unknown,
+  path: string,
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = unknownFieldError(value, MODEL_REGISTRY_ENTRY_FIELDS, path);
+  let error = unknownFieldError(
+    value,
+    schemaVersion === MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
+      ? MODEL_REGISTRY_ENTRY_V1_FIELDS
+      : MODEL_REGISTRY_ENTRY_V2_FIELDS,
+    path,
+  );
   if (error) return error;
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
@@ -866,20 +910,13 @@ function registryEntryError(value: unknown, path: string): string | null {
     routeKeys.add(routeKey);
     for (const agent of typedRoute.agents) supportedAgents.add(agent);
   }
-  if (value.newSessionDefault !== undefined) {
-    if (
-      !Array.isArray(value.newSessionDefault) ||
-      value.newSessionDefault.length === 0 ||
-      value.newSessionDefault.some((agent) => !isModelAgent(agent)) ||
-      new Set(value.newSessionDefault).size !== value.newSessionDefault.length
-    ) {
-      return `${path}.newSessionDefault must be a unique non-empty array of supported agents`;
-    }
-    for (const agent of value.newSessionDefault as ModelAgent[]) {
-      if (!supportedAgents.has(agent)) {
-        return `${path}.newSessionDefault.${agent} must be supported by at least one route`;
-      }
-    }
+  if (schemaVersion === MODEL_REGISTRY_SCHEMA_VERSION) {
+    const newSessionDefaultErrorMessage = newSessionDefaultError(
+      value.newSessionDefault,
+      `${path}.newSessionDefault`,
+      supportedAgents,
+    );
+    if (newSessionDefaultErrorMessage) return newSessionDefaultErrorMessage;
   }
   if (value.perAgent !== undefined) {
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
@@ -904,8 +941,13 @@ export function parseModelRegistry(value: unknown): ModelAccessParseResult<Model
   if (!isPlainObject(value)) return fail('modelRegistry must be an object');
   const unknownField = unknownFieldError(value, MODEL_REGISTRY_FIELDS, 'modelRegistry');
   if (unknownField) return fail(unknownField);
-  if (value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION) {
-    return fail(`modelRegistry.schemaVersion must be ${MODEL_REGISTRY_SCHEMA_VERSION}`);
+  if (
+    value.schemaVersion !== MODEL_REGISTRY_LEGACY_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION
+  ) {
+    return fail(
+      `modelRegistry.schemaVersion must be ${MODEL_REGISTRY_LEGACY_SCHEMA_VERSION} or ${MODEL_REGISTRY_SCHEMA_VERSION}`,
+    );
   }
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail('modelRegistry.updatedAt must be an ISO timestamp');
@@ -919,7 +961,7 @@ export function parseModelRegistry(value: unknown): ModelAccessParseResult<Model
       }
       modelIds.add(model.id);
     }
-    const error = registryEntryError(model, `modelRegistry.models[${index}]`);
+    const error = registryEntryError(model, `modelRegistry.models[${index}]`, value.schemaVersion);
     if (error) return fail(error);
   }
   return ok(value as unknown as ModelRegistry);

@@ -21,8 +21,11 @@ export const MODEL_ACCESS_EFFORTS = [
 ] as const;
 export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 
-/** Version of the provider-independent public model registry embedded in Catalog. */
-export const MODEL_REGISTRY_SCHEMA_VERSION = 1 as const;
+/** Legacy version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
+
+/** Current version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 
 /**
  * Lifecycle signal. `retired` is the explicit end-of-life tombstone; the
@@ -85,7 +88,7 @@ export interface ModelRegistryRoute {
   referencePrices?: ModelReferencePrice[];
 }
 
-export interface ModelRegistryEntry {
+interface ModelRegistryEntryBase {
   /** Stable provider-independent Cindy id, for example `openai/gpt-5.6-terra`. */
   id: string;
   name: string;
@@ -101,6 +104,15 @@ export interface ModelRegistryEntry {
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
+}
+
+/** Registry v1 entry. The strict v1 wire contract does not allow new-session defaults. */
+export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
+  newSessionDefault?: never;
+}
+
+/** Current Registry entry (schema v2). */
+export interface ModelRegistryEntry extends ModelRegistryEntryBase {
   /**
    * Agents for which this model is the preferred new-conversation default (the
    * cold-start seed). Independent of `sortOrder` (which only orders the picker)
@@ -116,11 +128,27 @@ export interface ModelRegistryEntry {
  * Public provider-independent metadata and reference-price registry.
  * This object is embedded as `Catalog.modelRegistry` in the public catalog JSON.
  */
-export interface ModelRegistry {
-  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
+interface ModelRegistryBase {
   /** Canonical UTC ISO timestamp (`Date#toISOString`) for the immutable registry snapshot. */
   updatedAt: string;
+}
+
+/**
+ * Source-compatible public Registry shape. Runtime parsing still enforces the exact per-version
+ * field allowlist; use ModelRegistryV1/ModelRegistryV2 when a builder needs compile-time precision.
+ */
+export interface ModelRegistry extends ModelRegistryBase {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION;
   models: ModelRegistryEntry[];
+}
+
+export interface ModelRegistryV1 extends ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION;
+  models: ModelRegistryEntryV1[];
+}
+
+export interface ModelRegistryV2 extends ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
 }
 
 export interface ModelTieredPricing {
@@ -329,6 +357,8 @@ export interface ListModelsResponseV2Model extends ModelCatalogEntry {
   cost?: ResolvedModelCost;
   releaseDate?: string;
   status?: 'active' | 'alpha' | 'deprecated';
+  /** Agents for which this available model is the preferred new-conversation default. */
+  newSessionDefault?: ModelAgent[];
   provenance?: ModelProvenance | ModelFieldProvenance;
 }
 
