@@ -615,11 +615,23 @@ describe('model access schema v2', () => {
           {
             id: 'unknown-vendor-model',
             providerReported: {
+              name: 'Provider model name',
+              description: 'Provider model description',
+              family: 'provider-family',
+              group: 'gpt',
+              mode: 'chat',
+              type: 'model',
               contextWindow: 200_000,
               maxOutput: 8_192,
+              sortOrder: 10,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+              supportsFastMode: true,
               modalities: { input: ['text'], output: ['text'] },
               capabilities: { reasoning: true },
-              mode: 'chat',
+              cost: { input: 1, output: 2, cacheRead: 0.5 },
+              releaseDate: '2026-07-31',
+              status: 'active',
             },
           },
         ],
@@ -657,6 +669,33 @@ describe('model access schema v2', () => {
       ok: true,
       value: resolveRequest,
     });
+  });
+
+  it('rejects malformed extended provider-reported facts', () => {
+    const requestEntry = resolveRequest.entries[0]!;
+    const requestModel = requestEntry.models[0]!;
+    const providerReported = requestModel.providerReported!;
+    const cases = [
+      [{ ...providerReported, status: 'retired' }, '.status'],
+      [{ ...providerReported, sortOrder: 0 }, '.sortOrder'],
+      [{ ...providerReported, defaultEffort: 'very-high' }, '.defaultEffort'],
+      [{ ...providerReported, cost: { input: -1 } }, '.cost.input'],
+      [{ ...providerReported, modalities: { input: [], output: ['text'] } }, '.modalities'],
+    ] as const;
+
+    for (const [facts, field] of cases) {
+      const result = parseResolveRequest({
+        ...resolveRequest,
+        entries: [
+          {
+            ...requestEntry,
+            models: [{ ...requestModel, providerReported: facts }],
+          },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain(field);
+    }
   });
 
   it('parses resolved responses and rejects malformed metadata without clearing snapshots', () => {

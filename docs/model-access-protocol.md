@@ -55,12 +55,22 @@ v2 新增模型目录 resolve 契约，同时保持 v1 的所有导出和字段�
           "id": "vendor-model-id",
           "name": "Vendor display name",
           "providerReported": {
+            "description": "Provider description",
+            "family": "vendor-family",
+            "group": "gpt",
             "contextWindow": 200000,
             "maxOutput": 8192,
+            "sortOrder": 10,
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "supportsFastMode": true,
             "modalities": { "input": ["text"], "output": ["text"] },
             "capabilities": { "reasoning": true },
+            "cost": { "input": 1, "output": 2 },
+            "releaseDate": "2026-07-31",
+            "status": "active",
             "mode": "chat",
-            "type": "chat"
+            "type": "model"
           }
         }
       ]
@@ -69,8 +79,10 @@ v2 新增模型目录 resolve 契约，同时保持 v1 的所有导出和字段�
 }
 ```
 
-`providerReported` 是上游事实提示，不是客户端目录元数据。未知模型必须照样进入
-request，服务端不能因为知识库没有匹配而过滤它。
+`providerReported` 是上游事实提示，不是客户端目录元数据。它可以携带 Provider 官方
+端点返回的名称、描述、family、group、mode/type、上下文与输出窗口、排序、effort、Fast
+Mode、多模态、能力、价格、发布日期和生命周期状态；服务端按字段与 Catalog / 知识库
+合并。未知模型必须照样进入 request，服务端不能因为知识库没有匹配而过滤它。
 
 ### Resolve response
 

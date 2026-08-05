@@ -96,12 +96,23 @@ const RESOLVE_REQUEST_ENTRY_FIELDS = ['providerId', 'agent', 'wireProtocol', 'mo
 const RESOLVE_RESPONSE_ENTRY_FIELDS = ['providerId', 'agent', 'models'] as const;
 const RESOLVE_REQUEST_MODEL_FIELDS = ['id', 'name', 'providerReported'] as const;
 const PROVIDER_REPORTED_MODEL_FIELDS = [
-  'contextWindow',
-  'maxOutput',
-  'modalities',
-  'capabilities',
+  'name',
+  'description',
+  'family',
+  'group',
   'mode',
   'type',
+  'contextWindow',
+  'maxOutput',
+  'sortOrder',
+  'efforts',
+  'defaultEffort',
+  'supportsFastMode',
+  'modalities',
+  'capabilities',
+  'cost',
+  'releaseDate',
+  'status',
 ] as const;
 const RESOLVED_MODEL_FIELDS = [
   'id',
@@ -543,22 +554,73 @@ function providerReportedError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(value, PROVIDER_REPORTED_MODEL_FIELDS, path);
   if (error) return error;
-  error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
-  if (error) return error;
-  error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
-  if (error) return error;
-  if (value.modalities !== undefined) {
-    error = modalitiesError(value.modalities, `${path}.modalities`);
-    if (error) return error;
-  }
-  if (value.capabilities !== undefined) {
-    error = capabilitiesError(value.capabilities, `${path}.capabilities`);
+  for (const [key, max] of [
+    ['name', 256],
+    ['description', 2_000],
+    ['family', 128],
+    ['group', 128],
+    ['releaseDate', 64],
+  ] as const) {
+    if (value[key] === undefined) continue;
+    error = requiredStringError(value[key], `${path}.${key}`, max);
     if (error) return error;
   }
   error = optionalChatModeError(value.mode, `${path}.mode`);
   if (error) return error;
   error = optionalStringError(value.type, `${path}.type`, 128);
   if (error) return error;
+  error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
+  if (error) return error;
+  error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
+  if (error) return error;
+  error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
+  if (error) return error;
+  if (typeof value.sortOrder === 'number' && value.sortOrder <= 0) {
+    return `${path}.sortOrder must be positive when present`;
+  }
+  error = effortListError(value.efforts, `${path}.efforts`);
+  if (error) return error;
+  if (
+    value.defaultEffort !== undefined &&
+    value.defaultEffort !== null &&
+    !isModelEffort(value.defaultEffort)
+  ) {
+    return `${path}.defaultEffort must be a supported effort value or null when present`;
+  }
+  if (value.supportsFastMode !== undefined && typeof value.supportsFastMode !== 'boolean') {
+    return `${path}.supportsFastMode must be a boolean when present`;
+  }
+  if (value.modalities !== undefined) {
+    error = modalitiesError(value.modalities, `${path}.modalities`);
+    if (error) return error;
+    const modalities = value.modalities as { input: unknown[]; output: unknown[] };
+    if (modalities.input.length === 0 || modalities.output.length === 0) {
+      return `${path}.modalities input and output must be non-empty`;
+    }
+  }
+  if (value.capabilities !== undefined) {
+    error = capabilitiesError(value.capabilities, `${path}.capabilities`);
+    if (error) return error;
+  }
+  if (value.cost !== undefined) {
+    if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    error = unknownFieldError(value.cost, RESOLVED_MODEL_COST_FIELDS, `${path}.cost`);
+    if (error) return error;
+    for (const field of RESOLVED_MODEL_COST_FIELDS) {
+      error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
+        nonNegative: true,
+      });
+      if (error) return error;
+    }
+  }
+  if (
+    value.status !== undefined &&
+    value.status !== 'active' &&
+    value.status !== 'alpha' &&
+    value.status !== 'deprecated'
+  ) {
+    return `${path}.status must be active, alpha, or deprecated when present`;
+  }
   return null;
 }
 
