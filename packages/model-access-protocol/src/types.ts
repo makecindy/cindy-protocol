@@ -317,12 +317,23 @@ export interface ResolveRequestModel {
 }
 
 export interface ProviderReportedModel {
-  contextWindow?: number;
-  maxOutput?: number;
-  modalities?: ResolvedModelModalities;
-  capabilities?: ResolvedModelCapabilities;
+  name?: string;
+  description?: string;
+  family?: string;
+  group?: string;
   mode?: ModelChatMode;
   type?: string;
+  contextWindow?: number;
+  maxOutput?: number;
+  sortOrder?: number;
+  efforts?: ModelEffort[];
+  defaultEffort?: ModelEffort | null;
+  supportsFastMode?: boolean;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  cost?: ResolvedModelCost;
+  releaseDate?: string;
+  status?: 'active' | 'alpha' | 'deprecated';
 }
 
 export interface ResolveRequestEntry {

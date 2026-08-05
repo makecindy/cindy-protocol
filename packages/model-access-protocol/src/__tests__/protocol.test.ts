@@ -12,6 +12,7 @@ import {
   parseListModelsResponse,
   parseListModelsResponseV2,
   parseModelRegistry,
+  parseProviderReportedModel,
   parseResolveRequest,
   parseResolveResponse,
   type ListModelsResponse,
@@ -615,11 +616,23 @@ describe('model access schema v2', () => {
           {
             id: 'unknown-vendor-model',
             providerReported: {
+              name: 'Provider model name',
+              description: 'Provider model description',
+              family: 'provider-family',
+              group: 'gpt',
+              mode: 'chat',
+              type: 'model',
               contextWindow: 200_000,
               maxOutput: 8_192,
+              sortOrder: 10,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+              supportsFastMode: true,
               modalities: { input: ['text'], output: ['text'] },
               capabilities: { reasoning: true },
-              mode: 'chat',
+              cost: { input: 1, output: 2, cacheRead: 0.5 },
+              releaseDate: '2026-07-31',
+              status: 'active',
             },
           },
         ],
@@ -657,6 +670,79 @@ describe('model access schema v2', () => {
       ok: true,
       value: resolveRequest,
     });
+  });
+
+  it('rejects malformed extended provider-reported facts', () => {
+    const requestEntry = resolveRequest.entries[0]!;
+    const requestModel = requestEntry.models[0]!;
+    const providerReported = requestModel.providerReported!;
+    const cases = [
+      [{ ...providerReported, status: 'retired' }, '.status'],
+      [{ ...providerReported, defaultEffort: 'very-high' }, '.defaultEffort'],
+      [{ ...providerReported, efforts: ['low'], defaultEffort: 'high' }, '.defaultEffort'],
+      [{ ...providerReported, cost: { input: -1 } }, '.cost.input'],
+      [{ ...providerReported, modalities: { input: [], output: ['text'] } }, '.modalities'],
+    ] as const;
+
+    for (const [facts, field] of cases) {
+      const result = parseResolveRequest({
+        ...resolveRequest,
+        entries: [
+          {
+            ...requestEntry,
+            models: [{ ...requestModel, providerReported: facts }],
+          },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain(field);
+    }
+  });
+
+  it('accepts zero-based provider ordering and ignores blank optional text facts', () => {
+    const requestEntry = resolveRequest.entries[0]!;
+    const requestModel = requestEntry.models[0]!;
+    const providerReported = {
+      ...requestModel.providerReported!,
+      name: '   ',
+      description: ' '.repeat(2_001),
+      family: '\t',
+      group: '',
+      type: ' '.repeat(129),
+      releaseDate: ' ',
+      sortOrder: 0,
+    };
+    const result = parseResolveRequest({
+      ...resolveRequest,
+      entries: [
+        {
+          ...requestEntry,
+          models: [{ ...requestModel, providerReported }],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.entries[0]!.models[0]!.providerReported).toEqual({
+        mode: 'chat',
+        contextWindow: 200_000,
+        maxOutput: 8_192,
+        sortOrder: 0,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+        supportsFastMode: true,
+        modalities: { input: ['text'], output: ['text'] },
+        capabilities: { reasoning: true },
+        cost: { input: 1, output: 2, cacheRead: 0.5 },
+        status: 'active',
+      });
+    }
+    expect(parseProviderReportedModel(providerReported)).toEqual(
+      result.ok
+        ? { ok: true, value: result.value.entries[0]!.models[0]!.providerReported }
+        : result,
+    );
   });
 
   it('parses resolved responses and rejects malformed metadata without clearing snapshots', () => {

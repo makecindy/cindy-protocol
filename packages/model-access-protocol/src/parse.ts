@@ -96,12 +96,23 @@ const RESOLVE_REQUEST_ENTRY_FIELDS = ['providerId', 'agent', 'wireProtocol', 'mo
 const RESOLVE_RESPONSE_ENTRY_FIELDS = ['providerId', 'agent', 'models'] as const;
 const RESOLVE_REQUEST_MODEL_FIELDS = ['id', 'name', 'providerReported'] as const;
 const PROVIDER_REPORTED_MODEL_FIELDS = [
-  'contextWindow',
-  'maxOutput',
-  'modalities',
-  'capabilities',
+  'name',
+  'description',
+  'family',
+  'group',
   'mode',
   'type',
+  'contextWindow',
+  'maxOutput',
+  'sortOrder',
+  'efforts',
+  'defaultEffort',
+  'supportsFastMode',
+  'modalities',
+  'capabilities',
+  'cost',
+  'releaseDate',
+  'status',
 ] as const;
 const RESOLVED_MODEL_FIELDS = [
   'id',
@@ -543,23 +554,119 @@ function providerReportedError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(value, PROVIDER_REPORTED_MODEL_FIELDS, path);
   if (error) return error;
+  for (const [key, max] of [
+    ['name', 256],
+    ['description', 2_000],
+    ['family', 128],
+    ['group', 128],
+    ['type', 128],
+    ['releaseDate', 64],
+  ] as const) {
+    if (value[key] === undefined) continue;
+    const text = value[key];
+    // Blank provider hints are normalized away after validation. Ignore their raw length here so
+    // a padded placeholder cannot reject an otherwise useful model batch.
+    if (typeof text === 'string' && text.trim().length === 0) continue;
+    error = optionalStringError(text, `${path}.${key}`, max);
+    if (error) return error;
+  }
+  error = optionalChatModeError(value.mode, `${path}.mode`);
+  if (error) return error;
   error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
   error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
   if (error) return error;
+  error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
+  if (error) return error;
+  error = effortListError(value.efforts, `${path}.efforts`);
+  if (error) return error;
+  if (
+    value.defaultEffort !== undefined &&
+    value.defaultEffort !== null &&
+    !isModelEffort(value.defaultEffort)
+  ) {
+    return `${path}.defaultEffort must be a supported effort value or null when present`;
+  }
+  if (
+    value.defaultEffort !== undefined &&
+    value.defaultEffort !== null &&
+    Array.isArray(value.efforts) &&
+    !value.efforts.includes(value.defaultEffort)
+  ) {
+    return `${path}.defaultEffort must be included in ${path}.efforts when both are present`;
+  }
+  if (value.supportsFastMode !== undefined && typeof value.supportsFastMode !== 'boolean') {
+    return `${path}.supportsFastMode must be a boolean when present`;
+  }
   if (value.modalities !== undefined) {
     error = modalitiesError(value.modalities, `${path}.modalities`);
     if (error) return error;
+    const modalities = value.modalities as { input: unknown[]; output: unknown[] };
+    if (modalities.input.length === 0 || modalities.output.length === 0) {
+      return `${path}.modalities input and output must be non-empty`;
+    }
   }
   if (value.capabilities !== undefined) {
     error = capabilitiesError(value.capabilities, `${path}.capabilities`);
     if (error) return error;
   }
-  error = optionalChatModeError(value.mode, `${path}.mode`);
-  if (error) return error;
-  error = optionalStringError(value.type, `${path}.type`, 128);
-  if (error) return error;
+  if (value.cost !== undefined) {
+    if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    error = unknownFieldError(value.cost, RESOLVED_MODEL_COST_FIELDS, `${path}.cost`);
+    if (error) return error;
+    for (const field of RESOLVED_MODEL_COST_FIELDS) {
+      error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
+        nonNegative: true,
+      });
+      if (error) return error;
+    }
+  }
+  if (
+    value.status !== undefined &&
+    value.status !== 'active' &&
+    value.status !== 'alpha' &&
+    value.status !== 'deprecated'
+  ) {
+    return `${path}.status must be active, alpha, or deprecated when present`;
+  }
   return null;
+}
+
+const PROVIDER_REPORTED_OPTIONAL_TEXT_FIELDS = [
+  'name',
+  'description',
+  'family',
+  'group',
+  'type',
+  'releaseDate',
+] as const satisfies readonly (keyof ProviderReportedModel)[];
+
+function normalizeProviderReportedModel(value: ProviderReportedModel): ProviderReportedModel {
+  let normalized: ProviderReportedModel | undefined;
+  for (const key of PROVIDER_REPORTED_OPTIONAL_TEXT_FIELDS) {
+    const text = value[key];
+    if (typeof text !== 'string' || text.trim().length > 0) continue;
+    normalized ??= { ...value };
+    delete normalized[key];
+  }
+  return normalized ?? value;
+}
+
+function normalizeResolveRequest(value: ResolveRequest): ResolveRequest {
+  let changed = false;
+  const entries = value.entries.map((entry) => {
+    const models = entry.models.map((model) => {
+      if (!model.providerReported) return model;
+      const providerReported = normalizeProviderReportedModel(model.providerReported);
+      if (providerReported === model.providerReported) return model;
+      changed = true;
+      return { ...model, providerReported };
+    });
+    return models.some((model, index) => model !== entry.models[index])
+      ? { ...entry, models }
+      : entry;
+  });
+  return changed ? { ...value, entries } : value;
 }
 
 function resolvedModelError(value: unknown, path: string): string | null {
@@ -706,7 +813,7 @@ export function parseResolveRequest(value: unknown): ModelAccessParseResult<Reso
     return fail(`request.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
   }
   const error = parseEntries(value.entries, 'request.entries', 'request');
-  return error ? fail(error) : ok(value as unknown as ResolveRequest);
+  return error ? fail(error) : ok(normalizeResolveRequest(value as unknown as ResolveRequest));
 }
 
 /** Strictly parse a v2 resolve response. Invalid responses must not replace a cached snapshot. */
@@ -818,7 +925,7 @@ export function parseProviderReportedModel(
   value: unknown,
 ): ModelAccessParseResult<ProviderReportedModel> {
   const error = providerReportedError(value, 'providerReported');
-  return error ? fail(error) : ok(value as ProviderReportedModel);
+  return error ? fail(error) : ok(normalizeProviderReportedModel(value as ProviderReportedModel));
 }
 
 export function parseListModelsResponse(
