@@ -587,6 +587,14 @@ function providerReportedError(value: unknown, path: string): string | null {
   ) {
     return `${path}.defaultEffort must be a supported effort value or null when present`;
   }
+  if (
+    value.defaultEffort !== undefined &&
+    value.defaultEffort !== null &&
+    Array.isArray(value.efforts) &&
+    !value.efforts.includes(value.defaultEffort)
+  ) {
+    return `${path}.defaultEffort must be included in ${path}.efforts when both are present`;
+  }
   if (value.supportsFastMode !== undefined && typeof value.supportsFastMode !== 'boolean') {
     return `${path}.supportsFastMode must be a boolean when present`;
   }

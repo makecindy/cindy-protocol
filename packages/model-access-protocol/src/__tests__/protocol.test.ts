@@ -679,6 +679,7 @@ describe('model access schema v2', () => {
       [{ ...providerReported, status: 'retired' }, '.status'],
       [{ ...providerReported, sortOrder: 0 }, '.sortOrder'],
       [{ ...providerReported, defaultEffort: 'very-high' }, '.defaultEffort'],
+      [{ ...providerReported, efforts: ['low'], defaultEffort: 'high' }, '.defaultEffort'],
       [{ ...providerReported, cost: { input: -1 } }, '.cost.input'],
       [{ ...providerReported, modalities: { input: [], output: ['text'] } }, '.modalities'],
     ] as const;
