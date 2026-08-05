@@ -63,6 +63,89 @@ const PRICING_FIELDS = [
   'outputCostPerVideoPerSecond',
 ] as const;
 
+const MODEL_ACCESS_CHAT_MODES = ['chat', 'responses'] as const;
+type ModelChatMode = (typeof MODEL_ACCESS_CHAT_MODES)[number];
+
+const MODEL_CATALOG_ENTRY_FIELDS = [
+  'id',
+  'currency',
+  'agents',
+  'name',
+  'group',
+  'description',
+  'contextWindow',
+  'maxOutputTokens',
+  'efforts',
+  'defaultEffort',
+  'sortOrder',
+  'supportsFastMode',
+  'defaultEnabled',
+  'perAgent',
+  ...PRICING_FIELDS,
+  'tieredPricing',
+] as const;
+const MODEL_TIERED_PRICING_FIELDS = [
+  'range',
+  'inputCostPerToken',
+  'outputCostPerToken',
+  'cacheReadInputTokenCost',
+  'cacheCreationInputTokenCost',
+] as const;
+const RESOLVE_REQUEST_FIELDS = ['schemaVersion', 'entries'] as const;
+const RESOLVE_RESPONSE_FIELDS = ['schemaVersion', 'knowledgeRevision', 'entries'] as const;
+const RESOLVE_REQUEST_ENTRY_FIELDS = ['providerId', 'agent', 'wireProtocol', 'models'] as const;
+const RESOLVE_RESPONSE_ENTRY_FIELDS = ['providerId', 'agent', 'models'] as const;
+const RESOLVE_REQUEST_MODEL_FIELDS = ['id', 'name', 'providerReported'] as const;
+const PROVIDER_REPORTED_MODEL_FIELDS = [
+  'contextWindow',
+  'maxOutput',
+  'modalities',
+  'capabilities',
+  'mode',
+  'type',
+] as const;
+const RESOLVED_MODEL_FIELDS = [
+  'id',
+  'name',
+  'description',
+  'family',
+  'group',
+  'category',
+  'mode',
+  'sortOrder',
+  'contextWindow',
+  'maxOutput',
+  'efforts',
+  'defaultEffort',
+  'effortDisplayNames',
+  'supportsFastMode',
+  'modalities',
+  'capabilities',
+  'cost',
+  'releaseDate',
+  'status',
+  'defaultEnabled',
+  'provenance',
+] as const;
+const LIST_MODELS_V2_FIELDS = ['schemaVersion', 'models'] as const;
+const LIST_MODELS_V2_MODEL_FIELDS = [
+  ...MODEL_CATALOG_ENTRY_FIELDS,
+  'family',
+  'category',
+  'mode',
+  'maxOutput',
+  'effortDisplayNames',
+  'modalities',
+  'capabilities',
+  'cost',
+  'releaseDate',
+  'status',
+  'newSessionDefault',
+  'provenance',
+] as const;
+const RESOLVED_MODEL_MODALITIES_FIELDS = ['input', 'output'] as const;
+const RESOLVED_MODEL_COST_FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
+
 const MODEL_REGISTRY_FIELDS = ['schemaVersion', 'updatedAt', 'models'] as const;
 const MODEL_REGISTRY_ENTRY_V1_FIELDS = [
   'id',
@@ -136,6 +219,10 @@ export function isModelCurrency(value: unknown): value is ModelCurrency {
 
 function isModelAgent(value: unknown): value is ModelAgent {
   return typeof value === 'string' && MODEL_ACCESS_AGENTS.includes(value as ModelAgent);
+}
+
+function isModelChatMode(value: unknown): value is ModelChatMode {
+  return typeof value === 'string' && MODEL_ACCESS_CHAT_MODES.includes(value as ModelChatMode);
 }
 
 function isModelEffort(value: unknown): value is ModelEffort {
@@ -268,12 +355,18 @@ function overrideError(
   return null;
 }
 
-function tieredPricingError(value: unknown, path: string): string | null {
+function tieredPricingError(
+  value: unknown,
+  path: string,
+  allowedFields?: readonly string[],
+): string | null {
   if (value === undefined) return null;
   if (!Array.isArray(value)) return `${path} must be an array when present`;
   for (const [index, tier] of value.entries()) {
     const tierPath = `${path}[${index}]`;
     if (!isPlainObject(tier)) return `${tierPath} must be an object`;
+    const unknownField = allowedFields ? unknownFieldError(tier, allowedFields, tierPath) : null;
+    if (unknownField) return unknownField;
     if (
       !Array.isArray(tier.range) ||
       tier.range.length !== 2 ||
@@ -298,7 +391,7 @@ function tieredPricingError(value: unknown, path: string): string | null {
   return null;
 }
 
-function modelEntryError(value: unknown, path: string): string | null {
+function modelEntryError(value: unknown, path: string, strictNestedFields = false): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
@@ -357,7 +450,11 @@ function modelEntryError(value: unknown, path: string): string | null {
     });
     if (error) return error;
   }
-  error = tieredPricingError(value.tieredPricing, `${path}.tieredPricing`);
+  error = tieredPricingError(
+    value.tieredPricing,
+    `${path}.tieredPricing`,
+    strictNestedFields ? MODEL_TIERED_PRICING_FIELDS : undefined,
+  );
   if (error) return error;
 
   if (value.perAgent !== undefined) {
@@ -367,7 +464,12 @@ function modelEntryError(value: unknown, path: string): string | null {
       if (!supportedAgents.includes(agent)) {
         return `${path}.perAgent.${agent} must be included in ${path}.agents`;
       }
-      error = overrideError(override, `${path}.perAgent.${agent}`, efforts);
+      error = overrideError(
+        override,
+        `${path}.perAgent.${agent}`,
+        efforts,
+        strictNestedFields ? MODEL_REGISTRY_AGENT_OVERRIDE_FIELDS : undefined,
+      );
       if (error) return error;
     }
   }
@@ -413,8 +515,15 @@ function stringArrayError(value: unknown, path: string): string | null {
   return null;
 }
 
+function optionalChatModeError(value: unknown, path: string): string | null {
+  if (value === undefined) return null;
+  return isModelChatMode(value) ? null : `${path} must be chat or responses when present`;
+}
+
 function modalitiesError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
+  const unknownField = unknownFieldError(value, RESOLVED_MODEL_MODALITIES_FIELDS, path);
+  if (unknownField) return unknownField;
   return (
     stringArrayError(value.input, `${path}.input`) ??
     stringArrayError(value.output, `${path}.output`)
@@ -433,7 +542,9 @@ function capabilitiesError(value: unknown, path: string): string | null {
 
 function providerReportedError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
+  let error = unknownFieldError(value, PROVIDER_REPORTED_MODEL_FIELDS, path);
+  if (error) return error;
+  error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
   error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
   if (error) return error;
@@ -445,16 +556,18 @@ function providerReportedError(value: unknown, path: string): string | null {
     error = capabilitiesError(value.capabilities, `${path}.capabilities`);
     if (error) return error;
   }
-  for (const field of ['mode', 'type'] as const) {
-    error = optionalStringError(value[field], `${path}.${field}`, 128);
-    if (error) return error;
-  }
+  error = optionalChatModeError(value.mode, `${path}.mode`);
+  if (error) return error;
+  error = optionalStringError(value.type, `${path}.type`, 128);
+  if (error) return error;
   return null;
 }
 
 function resolvedModelError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = requiredStringError(value.id, `${path}.id`, 256);
+  let error = unknownFieldError(value, RESOLVED_MODEL_FIELDS, path);
+  if (error) return error;
+  error = requiredStringError(value.id, `${path}.id`, 256);
   if (error) return error;
   error = requiredStringError(value.name, `${path}.name`, 256);
   if (error) return error;
@@ -463,12 +576,13 @@ function resolvedModelError(value: unknown, path: string): string | null {
     ['family', 128],
     ['group', 128],
     ['category', 128],
-    ['mode', 128],
     ['releaseDate', 64],
   ] as const) {
     error = optionalStringError(value[key], `${path}.${key}`, max);
     if (error) return error;
   }
+  error = optionalChatModeError(value.mode, `${path}.mode`);
+  if (error) return error;
   error = requiredPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
   error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
@@ -509,6 +623,8 @@ function resolvedModelError(value: unknown, path: string): string | null {
   }
   if (value.cost !== undefined) {
     if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    error = unknownFieldError(value.cost, RESOLVED_MODEL_COST_FIELDS, `${path}.cost`);
+    if (error) return error;
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
       error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
         nonNegative: true,
@@ -530,7 +646,9 @@ function resolvedModelError(value: unknown, path: string): string | null {
 
 function resolveRequestModelError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = requiredStringError(value.id, `${path}.id`, 256);
+  let error = unknownFieldError(value, RESOLVE_REQUEST_MODEL_FIELDS, path);
+  if (error) return error;
+  error = requiredStringError(value.id, `${path}.id`, 256);
   if (error) return error;
   error = optionalStringError(value.name, `${path}.name`, 256);
   if (error) return error;
@@ -547,7 +665,13 @@ function parseEntries(value: unknown, path: string, kind: 'request' | 'response'
   for (const [index, entry] of value.entries()) {
     const entryPath = `${path}[${index}]`;
     if (!isPlainObject(entry)) return `${entryPath} must be an object`;
-    let error = requiredStringError(entry.providerId, `${entryPath}.providerId`, 128);
+    let error = unknownFieldError(
+      entry,
+      kind === 'request' ? RESOLVE_REQUEST_ENTRY_FIELDS : RESOLVE_RESPONSE_ENTRY_FIELDS,
+      entryPath,
+    );
+    if (error) return error;
+    error = requiredStringError(entry.providerId, `${entryPath}.providerId`, 128);
     if (error) return error;
     if (!isModelAgent(entry.agent)) return `${entryPath}.agent must be a supported agent`;
     if (kind === 'request') {
@@ -577,6 +701,8 @@ function parseEntries(value: unknown, path: string, kind: 'request' | 'response'
 /** Strictly parse a v2 resolve request. Invalid responses must not replace a cached snapshot. */
 export function parseResolveRequest(value: unknown): ModelAccessParseResult<ResolveRequest> {
   if (!isPlainObject(value)) return fail('request must be an object');
+  const unknownField = unknownFieldError(value, RESOLVE_REQUEST_FIELDS, 'request');
+  if (unknownField) return fail(unknownField);
   if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
     return fail(`request.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
   }
@@ -587,6 +713,8 @@ export function parseResolveRequest(value: unknown): ModelAccessParseResult<Reso
 /** Strictly parse a v2 resolve response. Invalid responses must not replace a cached snapshot. */
 export function parseResolveResponse(value: unknown): ModelAccessParseResult<ResolveResponse> {
   if (!isPlainObject(value)) return fail('response must be an object');
+  const unknownField = unknownFieldError(value, RESOLVE_RESPONSE_FIELDS, 'response');
+  if (unknownField) return fail(unknownField);
   if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
     return fail(`response.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
   }
@@ -602,16 +730,18 @@ export function parseResolveResponse(value: unknown): ModelAccessParseResult<Res
 
 function v2ModelIncrementalError(value: unknown, path: string): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error: string | null = null;
+  let error = unknownFieldError(value, LIST_MODELS_V2_MODEL_FIELDS, path);
+  if (error) return error;
   for (const [key, max] of [
     ['family', 128],
     ['category', 128],
-    ['mode', 128],
     ['releaseDate', 64],
   ] as const) {
     error = optionalStringError(value[key], `${path}.${key}`, max);
     if (error) return error;
   }
+  error = optionalChatModeError(value.mode, `${path}.mode`);
+  if (error) return error;
   error = optionalPositiveIntegerError(value.maxOutput, `${path}.maxOutput`);
   if (error) return error;
   if (value.effortDisplayNames !== undefined) {
@@ -634,6 +764,8 @@ function v2ModelIncrementalError(value: unknown, path: string): string | null {
   }
   if (value.cost !== undefined) {
     if (!isPlainObject(value.cost)) return `${path}.cost must be an object`;
+    error = unknownFieldError(value.cost, RESOLVED_MODEL_COST_FIELDS, `${path}.cost`);
+    if (error) return error;
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
       error = optionalFiniteNumberError(value.cost[field], `${path}.cost.${field}`, {
         nonNegative: true,
@@ -664,6 +796,8 @@ export function parseListModelsResponseV2(
   value: unknown,
 ): ModelAccessParseResult<ListModelsResponseV2> {
   if (!isPlainObject(value)) return fail('response must be an object');
+  const unknownField = unknownFieldError(value, LIST_MODELS_V2_FIELDS, 'response');
+  if (unknownField) return fail(unknownField);
   if (value.schemaVersion !== MODEL_ACCESS_RESOLVE_SCHEMA_VERSION) {
     return fail(`response.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
   }
@@ -671,7 +805,7 @@ export function parseListModelsResponseV2(
   const modelIds = new Set<string>();
   for (const [index, model] of value.models.entries()) {
     const path = `response.models[${index}]`;
-    const error = modelEntryError(model, path) ?? v2ModelIncrementalError(model, path);
+    const error = modelEntryError(model, path, true) ?? v2ModelIncrementalError(model, path);
     if (error) return fail(error);
     if (isPlainObject(model) && typeof model.id === 'string') {
       if (modelIds.has(model.id)) return fail(`${path}.id must be unique`);

@@ -143,6 +143,10 @@ Cindy AI 的现有 `GET /api/model-access/models` 信封采用加性 v2 扩展�
    保留上一份有效快照，**绝不能清空列表**。HTTP 请求失败也沿用该策略；只有解析成功且
    明确为 `models: []` 时，才可把目录更新为空。
 
+这里的“严格”意味着所有固定形状对象都拒绝字段白名单之外的 key；只有协议明确声明为
+开放映射的 `capabilities`（允许追加能力 key）与 `provenance`（模型字段名到来源的映射）
+保留扩展性，其中已知 capability 的值类型和所有 provenance value 仍必须通过校验。
+
 ## 兼容与发布顺序
 
 v1 是该 HTTP 响应首次纳入共享协议。新增 `schemaVersion` 和 `currency` 对旧客户端是
