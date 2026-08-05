@@ -159,7 +159,7 @@ describe('Ghost manifest contract', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
   });
 
-  it('accepts up to 48 OAuth scopes and rejects more', () => {
+  it('accepts up to 256 OAuth scopes and rejects more', () => {
     const withScopes = (count: number) =>
       validateGhostManifest({
         ...validManifest,
@@ -184,7 +184,7 @@ describe('Ghost manifest contract', () => {
         },
       });
 
-    expect(GHOST_OAUTH_SCOPES_MAX).toBe(48);
+    expect(GHOST_OAUTH_SCOPES_MAX).toBe(256);
     const accepted = withScopes(GHOST_OAUTH_SCOPES_MAX);
     expect(accepted.ok).toBe(true);
     expect(accepted.ok && accepted.manifest.network?.secrets?.[0]?.oauth?.scopes).toEqual(
@@ -192,7 +192,7 @@ describe('Ghost manifest contract', () => {
     );
     expect(withScopes(GHOST_OAUTH_SCOPES_MAX + 1)).toEqual({
       ok: false,
-      reason: 'network.secrets[].oauth.scopes 必须是 ≤48 条的数组',
+      reason: 'network.secrets[].oauth.scopes 必须是 ≤256 条的数组',
     });
   });
 

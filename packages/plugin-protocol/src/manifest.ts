@@ -402,7 +402,7 @@ export interface GhostSecretExchangeDecl {
 }
 
 /** OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。 */
-export const GHOST_OAUTH_SCOPES_MAX = 48;
+export const GHOST_OAUTH_SCOPES_MAX = 256;
 /** OAuth 凭证:extraAuthorizeParams 条数上限。 */
 export const GHOST_OAUTH_EXTRA_PARAMS_MAX = 8;
 /**
@@ -444,7 +444,7 @@ export interface GhostSecretOauthDecl {
   clientId?: string;
   /** 可选:内置 client 的 secret(与 clientId 成对;纯 PKCE 服务商可省略)。 */
   clientSecret?: string;
-  /** 申请的 scope 列表(0–48 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
+  /** 申请的 scope 列表(0–256 条,确认框逐条展示;缺省 = 不带 scope 参数)。 */
   scopes?: string[];
   /**
    * 可选:authorize URL 里 scope 参数的拼接分隔符。OAuth 标准是空格(缺省),
