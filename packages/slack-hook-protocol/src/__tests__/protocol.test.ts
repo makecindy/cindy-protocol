@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   HOOK_MAX_FRAME_CHARS,
+  HOOK_FEATURE_TURN_DELIVERY,
   HOOK_PROTOCOL_VERSION,
   isHookMessageType,
   makeHello,
@@ -19,12 +20,14 @@ import {
   makeTaskAck,
   makeTaskDispatch,
   makeTurnEnd,
+  makeTurnDelivery,
   makeWelcome,
   parseHookMessage,
   serializeHookMessage,
   type HookMessage,
   type TaskAckPayload,
   type TurnEndPayload,
+  type TurnDeliveryPayload,
 } from '../index';
 
 /** 构造 -> 序列化 -> 解析, 断言等价并返回解析结果(供进一步断言)。 */
@@ -62,6 +65,14 @@ const VALID_TURN_END_OK: TurnEndPayload = {
   usage: { durationMs: 4500 },
 };
 
+const VALID_TURN_DELIVERY_ACCEPTED: TurnDeliveryPayload = {
+  requestId: 'req-1',
+  state: 'accepted',
+  attempt: 0,
+  retryAt: null,
+  error: null,
+};
+
 describe('round-trip: 每种消息构造后可被解析且等价', () => {
   it('hello', () => {
     const msg = roundTrip(
@@ -93,6 +104,46 @@ describe('round-trip: 每种消息构造后可被解析且等价', () => {
     roundTrip(makeWelcome({ serverName: 'my-hooks', features: [] }));
     roundTrip(makePing());
     roundTrip(makePong());
+  });
+
+  it('turn.delivery accepted / retrying / delivered / failed', () => {
+    expect(HOOK_FEATURE_TURN_DELIVERY).toBe('turn-delivery-v1');
+    roundTrip(makeTurnDelivery(VALID_TURN_DELIVERY_ACCEPTED));
+    roundTrip(
+      makeTurnDelivery({
+        requestId: 'req-1',
+        state: 'retrying',
+        attempt: 1,
+        retryAt: 1_800_000_000_000,
+        error: {
+          code: 'X_RATE_LIMITED',
+          message: 'X 暂时限制了回复发布，服务端会自动重试。',
+          retryable: true,
+        },
+      }),
+    );
+    roundTrip(
+      makeTurnDelivery({
+        requestId: 'req-1',
+        state: 'delivered',
+        attempt: 2,
+        retryAt: null,
+        error: null,
+      }),
+    );
+    roundTrip(
+      makeTurnDelivery({
+        requestId: 'req-1',
+        state: 'failed',
+        attempt: 2,
+        retryAt: null,
+        error: {
+          code: 'X_FORBIDDEN',
+          message: 'X 拒绝了回复发布。',
+          retryable: false,
+        },
+      }),
+    );
   });
 
   it('task.dispatch 普通派发(workspace 路径)', () => {
@@ -439,10 +490,53 @@ describe('turn.end 状态联动约束', () => {
   });
 });
 
+describe('turn.delivery 状态联动约束', () => {
+  const valid = makeTurnDelivery(VALID_TURN_DELIVERY_ACCEPTED);
+
+  it('accepted / delivered 不带 error 或 retryAt', () => {
+    expectReject(
+      {
+        ...valid,
+        payload: { ...valid.payload, error: { code: 'X', message: 'x', retryable: false } },
+      },
+      'error must be null',
+    );
+    expectReject(
+      { ...valid, payload: { ...valid.payload, retryAt: 1_800_000_000_000 } },
+      'retryAt',
+    );
+  });
+
+  it('retrying 必须带可重试错误和 retryAt', () => {
+    expectReject({ ...valid, payload: { ...valid.payload, state: 'retrying' } }, 'retryAt');
+    expectReject(
+      {
+        ...valid,
+        payload: {
+          ...valid.payload,
+          state: 'retrying',
+          retryAt: 1_800_000_000_000,
+          error: { code: 'X', message: 'x', retryable: false },
+        },
+      },
+      'retryable must be true',
+    );
+  });
+
+  it('failed 必须带结构化错误，attempt 必须为非负整数', () => {
+    expectReject(
+      { ...valid, payload: { ...valid.payload, state: 'failed' } },
+      'error must be an object',
+    );
+    expectReject({ ...valid, payload: { ...valid.payload, attempt: 1.5 } }, 'attempt');
+  });
+});
+
 describe('辅助函数', () => {
   it('isHookMessageType', () => {
     expect(isHookMessageType('task.dispatch')).toBe(true);
     expect(isHookMessageType('task.cancel')).toBe(true); // v2 转正
+    expect(isHookMessageType('turn.delivery')).toBe(true);
     expect(isHookMessageType('task.pause')).toBe(false);
   });
 });

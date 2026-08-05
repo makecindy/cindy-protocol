@@ -15,6 +15,7 @@ export {
   makeTaskDispatch,
   makeTaskAck,
   makeTurnEnd,
+  makeTurnDelivery,
   makeTurnProgress,
   makeTurnReopen,
   makeBindStart,

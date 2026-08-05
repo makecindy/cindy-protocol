@@ -28,6 +28,7 @@ import {
   TELEGRAM_GROUP_ACTIVATION_ALWAYS,
   TELEGRAM_REPLY_QUOTE_DM,
   TELEGRAM_REPLY_QUOTE_GROUP,
+  TURN_DELIVERY_STATES,
   TURN_END_STATUSES,
   type BindUpdatePayload,
   type HookMessage,
@@ -340,6 +341,50 @@ function validateTurnEnd(p: Record<string, unknown>): string | null {
     return 'turn.end.usage.durationMs must be a non-negative finite number or null';
   }
   return validateAttachments(p.attachments, 'turn.end');
+}
+
+function validateTurnDelivery(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.requestId)) {
+    return 'turn.delivery.requestId must be a non-empty string';
+  }
+  if (!TURN_DELIVERY_STATES.includes(p.state as never)) {
+    return `turn.delivery.state must be one of: ${TURN_DELIVERY_STATES.join(', ')}`;
+  }
+  if (typeof p.attempt !== 'number' || !Number.isInteger(p.attempt) || p.attempt < 0) {
+    return 'turn.delivery.attempt must be a non-negative integer';
+  }
+  if (
+    p.retryAt !== null &&
+    (typeof p.retryAt !== 'number' || !Number.isFinite(p.retryAt) || p.retryAt < 0)
+  ) {
+    return 'turn.delivery.retryAt must be a non-negative finite number or null';
+  }
+  const retrying = p.state === 'retrying';
+  const failed = p.state === 'failed';
+  if (retrying !== (p.retryAt !== null)) {
+    return 'turn.delivery.retryAt must be non-null only when state is retrying';
+  }
+  if (!retrying && !failed) {
+    return p.error === null
+      ? null
+      : `turn.delivery.error must be null when state is ${String(p.state)}`;
+  }
+  if (!isPlainObject(p.error)) {
+    return `turn.delivery.error must be an object when state is ${String(p.state)}`;
+  }
+  if (!isNonEmptyString(p.error.code)) {
+    return 'turn.delivery.error.code must be a non-empty string';
+  }
+  if (!isNonEmptyString(p.error.message)) {
+    return 'turn.delivery.error.message must be a non-empty string';
+  }
+  if (typeof p.error.retryable !== 'boolean') {
+    return 'turn.delivery.error.retryable must be a boolean';
+  }
+  if (retrying && p.error.retryable !== true) {
+    return 'turn.delivery.error.retryable must be true when state is retrying';
+  }
+  return null;
 }
 
 function validateTurnProgress(p: Record<string, unknown>): string | null {
@@ -1175,6 +1220,7 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'task.dispatch': validateDispatch,
   'task.ack': validateAck,
   'turn.end': validateTurnEnd,
+  'turn.delivery': validateTurnDelivery,
   'turn.progress': validateTurnProgress,
   'turn.reopen': validateTurnReopen,
   'bind.start': validateBindStart,
