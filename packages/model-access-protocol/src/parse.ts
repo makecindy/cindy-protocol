@@ -1,5 +1,6 @@
 import {
   MODEL_ACCESS_AGENTS,
+  MODEL_ACCESS_CHAT_MODES,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
@@ -13,6 +14,7 @@ import {
   type ListModelsResponseV2,
   type ModelAccessParseResult,
   type ModelAgent,
+  type ModelChatMode,
   type ModelCurrency,
   type ModelEffort,
   type ModelPriceVariant,
@@ -62,9 +64,6 @@ const PRICING_FIELDS = [
   'inputCostPerVideoPerSecond',
   'outputCostPerVideoPerSecond',
 ] as const;
-
-const MODEL_ACCESS_CHAT_MODES = ['chat', 'responses'] as const;
-type ModelChatMode = (typeof MODEL_ACCESS_CHAT_MODES)[number];
 
 const MODEL_CATALOG_ENTRY_FIELDS = [
   'id',

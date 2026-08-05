@@ -241,6 +241,10 @@ export type ModelAccessParseResult<T> = { ok: true; value: T } | { ok: false; er
 /** Schema version for the model-catalog resolve request/response contract. */
 export const MODEL_ACCESS_RESOLVE_SCHEMA_VERSION = 2 as const;
 
+/** Supported chat transport modes in schema v2 model-access payloads. */
+export const MODEL_ACCESS_CHAT_MODES = ['chat', 'responses'] as const;
+export type ModelChatMode = (typeof MODEL_ACCESS_CHAT_MODES)[number];
+
 export const MODEL_ACCESS_PROVENANCES = [
   'provider',
   'override',
@@ -289,7 +293,7 @@ export interface ResolvedModel {
   family?: string;
   group?: string;
   category?: string;
-  mode?: string;
+  mode?: ModelChatMode;
   sortOrder?: number;
   contextWindow: number;
   maxOutput?: number;
@@ -317,7 +321,7 @@ export interface ProviderReportedModel {
   maxOutput?: number;
   modalities?: ResolvedModelModalities;
   capabilities?: ResolvedModelCapabilities;
-  mode?: string;
+  mode?: ModelChatMode;
   type?: string;
 }
 
@@ -349,7 +353,7 @@ export interface ResolveResponse {
 export interface ListModelsResponseV2Model extends ModelCatalogEntry {
   family?: string;
   category?: string;
-  mode?: string;
+  mode?: ModelChatMode;
   maxOutput?: number;
   effortDisplayNames?: Partial<Record<ModelEffort, string>>;
   modalities?: ResolvedModelModalities;

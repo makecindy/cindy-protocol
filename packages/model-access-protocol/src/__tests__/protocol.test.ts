@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CHAT_MODES,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
@@ -15,8 +16,11 @@ import {
   parseResolveResponse,
   type ListModelsResponse,
   type ListModelsResponseV2,
+  type ListModelsResponseV2Model,
+  type ModelChatMode,
   type ModelRegistryV1,
   type ModelRegistryV2,
+  type ProviderReportedModel,
   type ResolveRequest,
   type ResolveResponse,
   type ResolvedModel,
@@ -580,6 +584,13 @@ describe('public model registry contract', () => {
 });
 
 describe('model access schema v2', () => {
+  it('exports one closed chat-mode contract for all v2 model shapes', () => {
+    expect(MODEL_ACCESS_CHAT_MODES).toEqual(['chat', 'responses']);
+    expectTypeOf<ResolvedModel['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
+    expectTypeOf<ProviderReportedModel['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
+    expectTypeOf<ListModelsResponseV2Model['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
+  });
+
   const resolvedModel: ResolvedModel = {
     id: 'example-chat-model',
     name: 'Example Chat Model',
