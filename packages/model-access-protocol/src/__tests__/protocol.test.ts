@@ -708,6 +708,7 @@ describe('model access schema v2', () => {
       description: ' '.repeat(2_001),
       family: '\t',
       group: '',
+      type: ' '.repeat(129),
       releaseDate: ' ',
       sortOrder: 0,
     };
@@ -725,7 +726,6 @@ describe('model access schema v2', () => {
     if (result.ok) {
       expect(result.value.entries[0]!.models[0]!.providerReported).toEqual({
         mode: 'chat',
-        type: 'model',
         contextWindow: 200_000,
         maxOutput: 8_192,
         sortOrder: 0,

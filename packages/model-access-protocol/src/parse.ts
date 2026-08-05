@@ -559,6 +559,7 @@ function providerReportedError(value: unknown, path: string): string | null {
     ['description', 2_000],
     ['family', 128],
     ['group', 128],
+    ['type', 128],
     ['releaseDate', 64],
   ] as const) {
     if (value[key] === undefined) continue;
@@ -570,8 +571,6 @@ function providerReportedError(value: unknown, path: string): string | null {
     if (error) return error;
   }
   error = optionalChatModeError(value.mode, `${path}.mode`);
-  if (error) return error;
-  error = optionalStringError(value.type, `${path}.type`, 128);
   if (error) return error;
   error = optionalPositiveIntegerError(value.contextWindow, `${path}.contextWindow`);
   if (error) return error;
@@ -638,6 +637,7 @@ const PROVIDER_REPORTED_OPTIONAL_TEXT_FIELDS = [
   'description',
   'family',
   'group',
+  'type',
   'releaseDate',
 ] as const satisfies readonly (keyof ProviderReportedModel)[];
 
