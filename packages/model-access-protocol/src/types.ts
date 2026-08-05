@@ -21,8 +21,11 @@ export const MODEL_ACCESS_EFFORTS = [
 ] as const;
 export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 
-/** Version of the provider-independent public model registry embedded in Catalog. */
-export const MODEL_REGISTRY_SCHEMA_VERSION = 1 as const;
+/** Legacy version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
+
+/** Current version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 
 /**
  * Lifecycle signal. `retired` is the explicit end-of-life tombstone; the
@@ -85,7 +88,7 @@ export interface ModelRegistryRoute {
   referencePrices?: ModelReferencePrice[];
 }
 
-export interface ModelRegistryEntry {
+interface ModelRegistryEntryBase {
   /** Stable provider-independent Cindy id, for example `openai/gpt-5.6-terra`. */
   id: string;
   name: string;
@@ -103,15 +106,49 @@ export interface ModelRegistryEntry {
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
 }
 
+/** Registry v1 entry. The strict v1 wire contract does not allow new-session defaults. */
+export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
+  newSessionDefault?: never;
+}
+
+/** Current Registry entry (schema v2). */
+export interface ModelRegistryEntry extends ModelRegistryEntryBase {
+  /**
+   * Agents for which this model is the preferred new-conversation default (the
+   * cold-start seed). Independent of `sortOrder` (which only orders the picker)
+   * and `defaultEnabled` (picker visibility): clients prefer a marked model that
+   * is available and visible as the new-session seed, falling back to `sortOrder`
+   * when none is marked (or when several are, lowest `sortOrder` wins). Each
+   * listed agent must be routable by this entry.
+   */
+  newSessionDefault?: ModelAgent[];
+}
+
 /**
  * Public provider-independent metadata and reference-price registry.
  * This object is embedded as `Catalog.modelRegistry` in the public catalog JSON.
  */
-export interface ModelRegistry {
-  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
+interface ModelRegistryBase {
   /** Canonical UTC ISO timestamp (`Date#toISOString`) for the immutable registry snapshot. */
   updatedAt: string;
+}
+
+/**
+ * Source-compatible public Registry shape. Runtime parsing still enforces the exact per-version
+ * field allowlist; use ModelRegistryV1/ModelRegistryV2 when a builder needs compile-time precision.
+ */
+export interface ModelRegistry extends ModelRegistryBase {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION;
   models: ModelRegistryEntry[];
+}
+
+export interface ModelRegistryV1 extends ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION;
+  models: ModelRegistryEntryV1[];
+}
+
+export interface ModelRegistryV2 extends ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
 }
 
 export interface ModelTieredPricing {
@@ -200,3 +237,137 @@ export interface ListModelsResponse {
 }
 
 export type ModelAccessParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Schema version for the model-catalog resolve request/response contract. */
+export const MODEL_ACCESS_RESOLVE_SCHEMA_VERSION = 2 as const;
+
+/** Supported chat transport modes in schema v2 model-access payloads. */
+export const MODEL_ACCESS_CHAT_MODES = ['chat', 'responses'] as const;
+export type ModelChatMode = (typeof MODEL_ACCESS_CHAT_MODES)[number];
+
+export const MODEL_ACCESS_PROVENANCES = [
+  'provider',
+  'override',
+  'knowledge-base',
+  'default',
+] as const;
+export type ModelProvenance = (typeof MODEL_ACCESS_PROVENANCES)[number];
+
+/**
+ * Per-field provenance: maps a resolved model field name (`contextWindow`, `modalities`, …) to the
+ * layer that supplied its value. The resolver emits provenance **per field**, so this is the wire
+ * shape; a single top-level {@link ModelProvenance} string stays accepted for backward compatibility.
+ */
+export type ModelFieldProvenance = Partial<Record<string, ModelProvenance>>;
+
+/** Display and capability metadata for a resolved per-provider model offer. */
+export interface ResolvedModelCapabilities {
+  reasoning?: boolean;
+  toolCall?: boolean;
+  attachment?: boolean;
+  temperature?: boolean;
+  /** Additive capability keys may be introduced without changing the schema version. */
+  [key: string]: unknown;
+}
+
+export interface ResolvedModelModalities {
+  input: string[];
+  output: string[];
+}
+
+export interface ResolvedModelCost {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/**
+ * A model offer after provider facts and catalog knowledge have been resolved.
+ * The id is the provider-reported id and is never rewritten by resolve.
+ */
+export interface ResolvedModel {
+  id: string;
+  name: string;
+  description?: string;
+  family?: string;
+  group?: string;
+  category?: string;
+  mode?: ModelChatMode;
+  sortOrder?: number;
+  contextWindow: number;
+  maxOutput?: number;
+  efforts: ModelEffort[];
+  defaultEffort: ModelEffort | null;
+  effortDisplayNames?: Partial<Record<ModelEffort, string>>;
+  supportsFastMode?: boolean;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  cost?: ResolvedModelCost;
+  releaseDate?: string;
+  status?: 'active' | 'alpha' | 'deprecated';
+  defaultEnabled?: boolean;
+  provenance?: ModelProvenance | ModelFieldProvenance;
+}
+
+export interface ResolveRequestModel {
+  id: string;
+  name?: string;
+  providerReported?: ProviderReportedModel;
+}
+
+export interface ProviderReportedModel {
+  contextWindow?: number;
+  maxOutput?: number;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  mode?: ModelChatMode;
+  type?: string;
+}
+
+export interface ResolveRequestEntry {
+  providerId: string;
+  agent: ModelAgent;
+  wireProtocol?: string;
+  models: ResolveRequestModel[];
+}
+
+export interface ResolveRequest {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  entries: ResolveRequestEntry[];
+}
+
+export interface ResolveResponseEntry {
+  providerId: string;
+  agent: ModelAgent;
+  models: ResolvedModel[];
+}
+
+export interface ResolveResponse {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  knowledgeRevision: string;
+  entries: ResolveResponseEntry[];
+}
+
+/** Additive v2 fields on the existing ListModels model entry. */
+export interface ListModelsResponseV2Model extends ModelCatalogEntry {
+  family?: string;
+  category?: string;
+  mode?: ModelChatMode;
+  maxOutput?: number;
+  effortDisplayNames?: Partial<Record<ModelEffort, string>>;
+  modalities?: ResolvedModelModalities;
+  capabilities?: ResolvedModelCapabilities;
+  cost?: ResolvedModelCost;
+  releaseDate?: string;
+  status?: 'active' | 'alpha' | 'deprecated';
+  /** Agents for which this available model is the preferred new-conversation default. */
+  newSessionDefault?: ModelAgent[];
+  provenance?: ModelProvenance | ModelFieldProvenance;
+}
+
+/** Schema v2 keeps the v1 models envelope and fields, adding resolved metadata. */
+export interface ListModelsResponseV2 {
+  schemaVersion: typeof MODEL_ACCESS_RESOLVE_SCHEMA_VERSION;
+  models: ListModelsResponseV2Model[];
+}

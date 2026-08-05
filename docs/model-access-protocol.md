@@ -33,6 +33,120 @@ Catalog 中可选的 `modelRegistry` 段。
 - `agents` 是模型支持的 runtime tab，当前允许 `claude-code` / `codex`。
 - 价格、展示元数据、token 上限和 per-agent 覆盖均为可选字段。
 
+## Schema version 2
+
+v2 新增模型目录 resolve 契约，同时保持 v1 的所有导出和字段不变（append-only）。
+`MODEL_ACCESS_RESOLVE_SCHEMA_VERSION` 为 `2`，effort 词表为
+`minimal` / `low` / `medium` / `high` / `xhigh` / `max` / `ultra`，agent 词表为
+`claude-code` / `codex`。
+
+### Resolve request
+
+```json
+{
+  "schemaVersion": 2,
+  "entries": [
+    {
+      "providerId": "openrouter",
+      "agent": "codex",
+      "wireProtocol": "openai-responses",
+      "models": [
+        {
+          "id": "vendor-model-id",
+          "name": "Vendor display name",
+          "providerReported": {
+            "contextWindow": 200000,
+            "maxOutput": 8192,
+            "modalities": { "input": ["text"], "output": ["text"] },
+            "capabilities": { "reasoning": true },
+            "mode": "chat",
+            "type": "chat"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+`providerReported` 是上游事实提示，不是客户端目录元数据。未知模型必须照样进入
+request，服务端不能因为知识库没有匹配而过滤它。
+
+### Resolve response
+
+```json
+{
+  "schemaVersion": 2,
+  "knowledgeRevision": "models-dev-2026-07-31",
+  "entries": [
+    {
+      "providerId": "openrouter",
+      "agent": "codex",
+      "models": [
+        {
+          "id": "vendor-model-id",
+          "name": "Vendor display name",
+          "description": "…",
+          "family": "…",
+          "group": "gpt",
+          "category": "gpt",
+          "mode": "chat",
+          "sortOrder": 10,
+          "contextWindow": 200000,
+          "maxOutput": 8192,
+          "efforts": ["low", "medium", "high"],
+          "defaultEffort": "medium",
+          "effortDisplayNames": { "high": "High" },
+          "supportsFastMode": true,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "capabilities": { "reasoning": true, "toolCall": true },
+          "cost": { "input": 1, "output": 2 },
+          "releaseDate": "2026-07-31",
+          "status": "active",
+          "defaultEnabled": true,
+          "provenance": {
+            "contextWindow": "provider",
+            "modalities": "knowledge-base",
+            "category": "default"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+`ResolvedModel` 的字段语义与客户端 `CatalogModel` 对齐。`id` 是 provider 上报的稳定
+模型 id，resolve 绝不改写它。`provenance` 的规范 wire 形状是逐字段对象：key 是被补全
+的模型字段名，value 只能是 `provider`、`override`、`knowledge-base` 或 `default`；parser
+仍接受单个 provenance 字符串，仅用于兼容已经存在的旧响应。未知模型必须透传，并用
+保守默认补齐必需字段。
+
+### ListModels v2
+
+Cindy AI 的现有 `GET /api/model-access/models` 信封采用加性 v2 扩展：仍然是
+`{ models: [...] }`，现有字段永不改名、改语义或删除，另加 `schemaVersion: 2` 和
+`ResolvedModel` 的增量字段。`currency` 继续必填；已核实旧客户端不读取该字段，因此
+此要求对旧客户端安全。`newSessionDefault`（可选）是 agent 列表，必须非空、去重，且为
+该模型 `agents` 的子集；它表示可用模型中的新会话默认偏好，不改变模型可用性。
+`provenance` 与 Resolve response 一样使用逐字段对象。空数组表示确实没有模型，不能
+解释成“未知”或回退为上一份目录。
+
+### 契约不变量与消费失败语义
+
+1. 未知模型必须透传；服务端绝不改模型 id，alias 只用于服务端内部知识库匹配。
+2. 聊天模型的 `mode` 只能是 `chat` / `responses`，或省略；未知 mode 不得作为聊天
+   模型发送。
+3. 版本演进只允许 append-only。旧客户端红线是 `{models:[...]}` 信封以及现有字段的
+   名称和语义永不改删；空数组是“真无模型”。
+4. v2 parser 是严格逐字段校验器。消费方收到 `ok: false` 时必须拒收本次 payload，
+   保留上一份有效快照，**绝不能清空列表**。HTTP 请求失败也沿用该策略；只有解析成功且
+   明确为 `models: []` 时，才可把目录更新为空。
+
+这里的“严格”意味着所有固定形状对象都拒绝字段白名单之外的 key；只有协议明确声明为
+开放映射的 `capabilities`（允许追加能力 key）与 `provenance`（模型字段名到来源的映射）
+保留扩展性，其中已知 capability 的值类型和所有 provenance value 仍必须通过校验。
+
 ## 兼容与发布顺序
 
 v1 是该 HTTP 响应首次纳入共享协议。新增 `schemaVersion` 和 `currency` 对旧客户端是
@@ -51,13 +165,14 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 ```json
 {
   "modelRegistry": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "updatedAt": "2026-07-31T00:00:00.000Z",
     "models": [
       {
         "id": "openai/gpt-example",
         "name": "GPT Example",
         "contextWindow": 200000,
+        "newSessionDefault": ["codex"],
         "routes": [
           {
             "providerId": "openai",
@@ -86,6 +201,10 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 ```
 
 - `id` 是 Cindy 稳定的规范模型 id；`routes` 映射供应商实际接受的 model id 和 runtime。
+- Registry v1 保持原有严格字段集合；v2 新增 `newSessionDefault`。新版 parser 双读 v1/v2，
+  但每个版本仍使用独立的严格字段白名单，未知版本不会被部分解释。
+- `newSessionDefault` 是 Cindy 面向 agent 的目录级新会话 seed 偏好，不是用户偏好、授权
+  或实时可用性。列表必须非空、去重，且每个 agent 至少被该 entry 的一条 route 支持。
 - 动态模型发现与 AIGateway 仍分别决定“当前是否可用”和 XD 的实际可售价格；
   `modelRegistry` 不得把静态条目解释成可用授权，也不得覆盖 Gateway 实价。
 - 参考价格统一为每百万 token，可按输入 token 区间和生效日期声明多档价格。消费者
@@ -93,6 +212,8 @@ append-only：旧客户端忽略未知字段并继续使用原有模型目录。
 - `updatedAt` 必须是 `Date#toISOString()` 形式的规范 UTC 时间戳。同一路由、同币种、
   同 variant 的价格不能同时在生效日期与输入 token 区间上重叠；区间上界均为 exclusive，
   因此相邻档位合法，依赖数组顺序消歧的配置会被整份拒收。
+- 从 v1 发布 v2 时必须推进 `updatedAt`；schemaVersion 属于不可变快照内容，不能让两个
+  不同版本复用同一个 revision。
 - 每个参考价必须带官方 HTTPS 来源和最近核验日期。它表达第三方公开牌价估算，
   不是用户账户的实际账单。
 - 旧客户端忽略整个可选段；新客户端遇到未知 registry 版本或非法内容时保留上一份
