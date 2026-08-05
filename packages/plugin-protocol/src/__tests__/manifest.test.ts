@@ -159,6 +159,132 @@ describe('Ghost manifest contract', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
   });
 
+  it('accepts a gh-cli secret with a settings-managed fallback token', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com', 'objects.githubusercontent.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub login',
+            source: 'gh-cli',
+            hint: 'The host prefers GitHub CLI and falls back to this token',
+            url: 'https://github.com/settings/tokens',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['API.GITHUB.COM'],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      manifest: expect.objectContaining({
+        network: {
+          hosts: ['api.github.com', 'objects.githubusercontent.com'],
+          secrets: [
+            {
+              key: 'github_pat',
+              label: 'GitHub login',
+              source: 'gh-cli',
+              hint: 'The host prefers GitHub CLI and falls back to this token',
+              url: 'https://github.com/settings/tokens',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                hosts: ['api.github.com'],
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
+
+  it('rejects unsafe gh-cli declarations', () => {
+    const base = {
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.github.com', 'uploads.github.com'],
+        secrets: [
+          {
+            key: 'github_pat',
+            label: 'GitHub login',
+            source: 'gh-cli',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.github.com'],
+            },
+          },
+        ],
+      },
+    };
+    const secret = (patch: Record<string, unknown> = {}) => ({
+      ...base,
+      network: {
+        ...base.network,
+        secrets: [{ ...base.network.secrets[0], ...patch }],
+      },
+    });
+
+    expect(validateGhostManifest({ ...base, settingsHtml: undefined })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('settingsHtml'),
+    });
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: {
+            header: 'X-GitHub-Token',
+            format: 'Bearer {value}',
+            hosts: ['api.github.com'],
+          },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: {
+            header: 'Authorization',
+            format: 'Bearer {value}',
+            hosts: ['api.github.com', 'uploads.github.com'],
+          },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    expect(
+      validateGhostManifest(
+        secret({
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    expect(validateGhostManifest(secret({ exchange: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许声明 exchange'),
+    });
+    expect(validateGhostManifest(secret({ oauth: {} }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('oauth 仅允许在 source: oauth'),
+    });
+    expect(validateGhostManifest(secret({ input: 'ghost' }))).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许标注 input'),
+    });
+  });
+
   it('accepts up to 256 OAuth scopes and rejects more', () => {
     const withScopes = (count: number) =>
       validateGhostManifest({

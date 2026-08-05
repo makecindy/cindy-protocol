@@ -530,6 +530,12 @@ export const GHOST_OAUTH_BOUNCE_PATH_RE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)
  *   `Authorization: Bearer {value}` 并显式声明非空的精确 inject.hosts;
  *   不允许 url / exchange / oauth / input,也不要求 settingsHtml。只有
  *   organization scope 的插件可以通过 Plugin Market 发布该来源。
+ * - 'gh-cli'(2026-08-05 增补):值优先取主机本地 GitHub CLI
+ *   登录态(`gh auth token`),不可用时回落到用户在该插件设置页
+ *   保存的备用 Token。两种值都只允许固定注入
+ *   `https://api.github.com` 的 `Authorization: Bearer {value}`;插件和
+ *   Node Worker 不能读取令牌。必须声明 settingsHtml 作为
+ *   备用 Token 的管理入口,不允许 exchange / oauth / input。
  */
 export const GHOST_SECRET_SOURCES = [
   'user',
@@ -537,6 +543,7 @@ export const GHOST_SECRET_SOURCES = [
   'oauth',
   'login-feishu-token',
   'oidc-token',
+  'gh-cli',
 ] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
@@ -1416,6 +1423,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (s.source === 'oauth') source = 'oauth';
           if (s.source === 'login-feishu-token') source = 'login-feishu-token';
           if (s.source === 'oidc-token') source = 'oidc-token';
+          if (s.source === 'gh-cli') source = 'gh-cli';
         }
         // 输入面字段已退役(2026-07-13 宿主凭证渲染整体退役):user 凭证
         // 一律意识 settingsHtml 收单。遗留 `input: "ghost"` 接受并忽略
@@ -1431,14 +1439,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         // 不填、没有输入面,禁 url / exchange,settingsHtml 豁免。oidc-token
         // 同样由 Host 托管,但值来自当前组织 Membership 的 Connection JWT。
         const loginDerived = source === 'login-email' || source === 'login-feishu-token';
-        const hostManaged = source === 'oidc-token';
-        if (s.input === 'ghost' && (loginDerived || hostManaged)) {
+        const oidcManaged = source === 'oidc-token';
+        const ghCliManaged = source === 'gh-cli';
+        if (s.input === 'ghost' && (loginDerived || oidcManaged || ghCliManaged)) {
           return {
             ok: false,
             reason: `source: ${source} 的凭证不允许标注 input: ghost(Host 托管凭证没有输入,谈不上谁收单)`,
           };
         }
-        if (!loginDerived && !hostManaged && raw.settingsHtml === undefined) {
+        if (!loginDerived && !oidcManaged && raw.settingsHtml === undefined) {
           return {
             ok: false,
             reason:
@@ -1459,17 +1468,24 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             reason: `network.secrets[].source 为 ${source} 时不允许声明 exchange(登录态凭证不外送交换端点)`,
           };
         }
-        if (hostManaged && s.url !== undefined) {
+        if (oidcManaged && s.url !== undefined) {
           return {
             ok: false,
             reason: 'network.secrets[].source 为 oidc-token 时不允许声明 url(令牌由 Host 按需签发)',
           };
         }
-        if (hostManaged && s.exchange !== undefined) {
+        if (oidcManaged && s.exchange !== undefined) {
           return {
             ok: false,
             reason:
               'network.secrets[].source 为 oidc-token 时不允许声明 exchange(不允许把 Connection JWT 转交给第三方端点)',
+          };
+        }
+        if (ghCliManaged && s.exchange !== undefined) {
+          return {
+            ok: false,
+            reason:
+              'network.secrets[].source 为 gh-cli 时不允许声明 exchange(不允许把 GitHub 登录令牌转交给第三方端点)',
           };
         }
         if (
@@ -1552,7 +1568,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             injectHosts.push(ihNorm);
           }
         }
-        if (hostManaged) {
+        if (oidcManaged) {
           if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
             return {
               ok: false,
@@ -1571,6 +1587,26 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
               ok: false,
               reason:
                 'network.secrets[].source 为 oidc-token 时 inject.hosts 只允许精确域名,不允许通配',
+            };
+          }
+        }
+        if (ghCliManaged) {
+          if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
+            return {
+              ok: false,
+              reason:
+                'network.secrets[].source 为 gh-cli 时 inject 必须是 Authorization: Bearer {value}',
+            };
+          }
+          if (
+            injectHosts === undefined ||
+            injectHosts.length !== 1 ||
+            injectHosts[0] !== 'api.github.com'
+          ) {
+            return {
+              ok: false,
+              reason:
+                'network.secrets[].source 为 gh-cli 时 inject.hosts 必须且只能是 api.github.com',
             };
           }
         }

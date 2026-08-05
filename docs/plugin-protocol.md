@@ -159,6 +159,53 @@ Desktop 为当前企业 Membership 按需签发短时 Connection JWT。令牌只
 plugin-server 或 Desktop 不认识该来源时必须拒绝发布/安装，并保留已有安装；部署顺序
 应为先合并协议，再升级 plugin-server，最后发布支持正式 Market provenance 的 Desktop。
 
+### Host 托管的 GitHub CLI 凭证
+
+受信的 GitHub 插件可以声明 `network.secrets[].source: "gh-cli"`，请求
+Cindy Desktop 优先使用本机 `gh auth token` 的登录令牌；本机未安装 `gh`、
+未登录或读取失败时，回落到用户在该插件设置页保存的备用 Token。
+两种令牌都由 Host 选择并注入，插件代码和 Node Worker 无法读取明文：
+
+```json
+{
+  "settingsHtml": "settings.html",
+  "slots": ["network"],
+  "network": {
+    "hosts": ["api.github.com"],
+    "secrets": [
+      {
+        "key": "github_pat",
+        "label": "GitHub login",
+        "source": "gh-cli",
+        "url": "https://github.com/settings/tokens",
+        "inject": {
+          "header": "Authorization",
+          "format": "Bearer {value}",
+          "hosts": ["api.github.com"]
+        }
+      }
+    ]
+  }
+}
+```
+
+该来源必须同时满足：
+
+- `settingsHtml` 必填，作为备用 Token 的写入、替换和清除入口；
+- `inject.header` 固定为 `Authorization`，`inject.format` 固定为
+  `Bearer {value}`；
+- `inject.hosts` 必须且只能声明精确域名 `api.github.com`；
+- 不得声明 `input`、`exchange` 或 `oauth`；`url` 可用于展示备用
+  Token 的 HTTPS 申请入口；
+- Plugin Server 与其他 source 一样只消费本 Protocol 的结构校验，
+  不读取、解析或注入 GitHub 凭证；宿主凭证的信任、用户授权与运行期
+  注入边界由 Desktop 的统一插件权限模型执行。
+
+这是 schema v2 的新增 manifest 能力，不改变未声明该来源的既有插件。
+旧版 plugin-server 或 Desktop 不认识该来源时必须拒绝发布/安装并保留已有
+安装。部署顺序为：先合并协议，再升级并部署 plugin-server，然后发布支持
+`gh-cli` 且接入统一插件权限模型的 Desktop，最后上架声明该来源的插件。
+
 ## 解析客户端 HTTP 响应
 
 HTTP 返回体必须先作为 `unknown` 解析，再交给对应解析器：
