@@ -78,6 +78,7 @@ const MODEL_REGISTRY_ENTRY_FIELDS = [
   'supportsFastMode',
   'defaultEnabled',
   'perAgent',
+  'newSessionDefault',
 ] as const;
 const MODEL_REGISTRY_ROUTE_FIELDS = ['providerId', 'modelId', 'agents', 'referencePrices'] as const;
 const MODEL_REGISTRY_AGENT_OVERRIDE_FIELDS = [
@@ -864,6 +865,21 @@ function registryEntryError(value: unknown, path: string): string | null {
     if (routeKeys.has(routeKey)) return `${path}.routes[${index}] must be unique`;
     routeKeys.add(routeKey);
     for (const agent of typedRoute.agents) supportedAgents.add(agent);
+  }
+  if (value.newSessionDefault !== undefined) {
+    if (
+      !Array.isArray(value.newSessionDefault) ||
+      value.newSessionDefault.length === 0 ||
+      value.newSessionDefault.some((agent) => !isModelAgent(agent)) ||
+      new Set(value.newSessionDefault).size !== value.newSessionDefault.length
+    ) {
+      return `${path}.newSessionDefault must be a unique non-empty array of supported agents`;
+    }
+    for (const agent of value.newSessionDefault as ModelAgent[]) {
+      if (!supportedAgents.has(agent)) {
+        return `${path}.newSessionDefault.${agent} must be supported by at least one route`;
+      }
+    }
   }
   if (value.perAgent !== undefined) {
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;

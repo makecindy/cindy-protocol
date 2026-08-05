@@ -101,6 +101,15 @@ export interface ModelRegistryEntry {
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
+  /**
+   * Agents for which this model is the preferred new-conversation default (the
+   * cold-start seed). Independent of `sortOrder` (which only orders the picker)
+   * and `defaultEnabled` (picker visibility): clients prefer a marked model that
+   * is available and visible as the new-session seed, falling back to `sortOrder`
+   * when none is marked (or when several are, lowest `sortOrder` wins). Each
+   * listed agent must be routable by this entry.
+   */
+  newSessionDefault?: ModelAgent[];
 }
 
 /**
