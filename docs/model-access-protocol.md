@@ -82,7 +82,9 @@ v2 新增模型目录 resolve 契约，同时保持 v1 的所有导出和字段�
 `providerReported` 是上游事实提示，不是客户端目录元数据。它可以携带 Provider 官方
 端点返回的名称、描述、family、group、mode/type、上下文与输出窗口、排序、effort、Fast
 Mode、多模态、能力、价格、发布日期和生命周期状态；服务端按字段与 Catalog / 知识库
-合并。未知模型必须照样进入 request，服务端不能因为知识库没有匹配而过滤它。
+合并。可选文本字段为空或仅含空白时按“未上报”处理；`sortOrder` 是有限数值排序键，允许
+`0` 和负数，不表示从 1 开始的名次。未知模型必须照样进入 request，服务端不能因为知识库
+没有匹配而过滤它。
 
 ### Resolve response
 

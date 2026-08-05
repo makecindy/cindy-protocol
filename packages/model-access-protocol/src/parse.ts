@@ -562,7 +562,7 @@ function providerReportedError(value: unknown, path: string): string | null {
     ['releaseDate', 64],
   ] as const) {
     if (value[key] === undefined) continue;
-    error = requiredStringError(value[key], `${path}.${key}`, max);
+    error = optionalStringError(value[key], `${path}.${key}`, max);
     if (error) return error;
   }
   error = optionalChatModeError(value.mode, `${path}.mode`);
@@ -575,9 +575,6 @@ function providerReportedError(value: unknown, path: string): string | null {
   if (error) return error;
   error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
   if (error) return error;
-  if (typeof value.sortOrder === 'number' && value.sortOrder <= 0) {
-    return `${path}.sortOrder must be positive when present`;
-  }
   error = effortListError(value.efforts, `${path}.efforts`);
   if (error) return error;
   if (
@@ -630,6 +627,42 @@ function providerReportedError(value: unknown, path: string): string | null {
     return `${path}.status must be active, alpha, or deprecated when present`;
   }
   return null;
+}
+
+const PROVIDER_REPORTED_OPTIONAL_TEXT_FIELDS = [
+  'name',
+  'description',
+  'family',
+  'group',
+  'releaseDate',
+] as const satisfies readonly (keyof ProviderReportedModel)[];
+
+function normalizeProviderReportedModel(value: ProviderReportedModel): ProviderReportedModel {
+  let normalized: ProviderReportedModel | undefined;
+  for (const key of PROVIDER_REPORTED_OPTIONAL_TEXT_FIELDS) {
+    const text = value[key];
+    if (typeof text !== 'string' || text.trim().length > 0) continue;
+    normalized ??= { ...value };
+    delete normalized[key];
+  }
+  return normalized ?? value;
+}
+
+function normalizeResolveRequest(value: ResolveRequest): ResolveRequest {
+  let changed = false;
+  const entries = value.entries.map((entry) => {
+    const models = entry.models.map((model) => {
+      if (!model.providerReported) return model;
+      const providerReported = normalizeProviderReportedModel(model.providerReported);
+      if (providerReported === model.providerReported) return model;
+      changed = true;
+      return { ...model, providerReported };
+    });
+    return models.some((model, index) => model !== entry.models[index])
+      ? { ...entry, models }
+      : entry;
+  });
+  return changed ? { ...value, entries } : value;
 }
 
 function resolvedModelError(value: unknown, path: string): string | null {
@@ -776,7 +809,7 @@ export function parseResolveRequest(value: unknown): ModelAccessParseResult<Reso
     return fail(`request.schemaVersion must be ${MODEL_ACCESS_RESOLVE_SCHEMA_VERSION}`);
   }
   const error = parseEntries(value.entries, 'request.entries', 'request');
-  return error ? fail(error) : ok(value as unknown as ResolveRequest);
+  return error ? fail(error) : ok(normalizeResolveRequest(value as unknown as ResolveRequest));
 }
 
 /** Strictly parse a v2 resolve response. Invalid responses must not replace a cached snapshot. */
@@ -888,7 +921,7 @@ export function parseProviderReportedModel(
   value: unknown,
 ): ModelAccessParseResult<ProviderReportedModel> {
   const error = providerReportedError(value, 'providerReported');
-  return error ? fail(error) : ok(value as ProviderReportedModel);
+  return error ? fail(error) : ok(normalizeProviderReportedModel(value as ProviderReportedModel));
 }
 
 export function parseListModelsResponse(
