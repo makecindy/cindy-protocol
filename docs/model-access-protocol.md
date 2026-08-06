@@ -18,9 +18,11 @@ Catalog 中可选的 `modelRegistry` 段。
   "models": [
     {
       "id": "example-chat-model",
+      "mode": "chat",
       "currency": "CNY",
       "agents": ["claude-code", "codex"],
       "newSessionDefault": ["claude-code", "codex"],
+      "modalities": { "input": ["text", "image"], "output": ["text"] },
       "inputCostPerToken": 0.000001,
       "outputCostPerToken": 0.000002
     }
@@ -32,15 +34,27 @@ Catalog 中可选的 `modelRegistry` 段。
 - 所有价格字段均使用同一条目的 `currency`，并保留服务端下发的 per-unit 原值；
   消费者不得根据 UI 语言、系统地区或登录区域自行推断币种。
 - `agents` 是模型支持的 runtime tab，当前允许 `claude-code` / `codex`。
+- `mode` 是 Gateway 原生模型分类字符串，服务端不改名；`modalities` 是服务端从 Gateway
+  architecture 归一化得到的输入/输出模态。它们是 v1 已有的可选 wire 字段，v1/v2
+  allowlist 均保留。
 - v2 的 `newSessionDefault` 表示该**当前可用模型**是哪些 agent 的新对话默认种子；数组
-  必须非空、去重且是 `agents` 子集。部署可以按区域策略选择是否下发该字段。
+  必须非空、去重且是 `agents` 子集。多个可用、可见条目同时标记时，先取较低的数字
+  `sortOrder`（缺省排在所有数字之后），完全相同时取响应 `models` 数组中较早的条目。
+  部署可以按区域策略选择是否下发该字段。
 - 价格、展示元数据、token 上限和 per-agent 覆盖均为可选字段。
 
 ## 兼容与发布顺序
 
 v1 是该 HTTP 响应首次纳入共享协议；v2 只新增 `newSessionDefault`。parser 严格双读：
-v1 响应继续合法但不能携带该字段，v2 对字段做完整联动校验。旧 parser 遇到 v2 时拒绝
-响应并保留上一份有效目录；依赖默认策略的新客户端必须在服务端已部署 v2 后发布。
+v1 响应继续合法但不能携带该字段，v2 对字段做完整联动校验。发布顺序必须是：先合并本
+Protocol 变更，再发布能双读 v1/v2 的客户端，确认 reader 覆盖后才让服务端开始发 v2。
+过渡期内新客户端读到 v1 时沿用既有排序默认；仍未升级的旧 parser 若遇到 v2，会拒绝
+响应并保留上一份有效目录。
+
+双读器把 v1 冻结为已部署的已知 wire shape：此前已经由服务端下发但共享类型漏记的
+`mode` / `modalities` 已正式纳入 v1/v2；其它未声明字段会使整份响应被拒绝。也就是说，
+“兼容 v1”指继续读取这份冻结后的 v1 契约，不再继承旧 parser 对任意 append-only 字段的
+宽松容忍。生产者若要新增字段必须升版本，不能继续扩展 v1。
 
 新增字段、修改字段语义、移除字段或扩展闭合枚举时都必须按协议 Change gate 评估版本；
 不能把新字段塞进旧版本的严格 wire allowlist。
@@ -92,10 +106,15 @@ v1 响应继续合法但不能携带该字段，v2 对字段做完整联动校�
 - Registry v2 的 `newSessionDefault` 表示哪些 agent 倾向把该模型作为新对话冷启动种子，
   与只控制选择器排序的 `sortOrder`、只控制默认可见性的 `defaultEnabled` 独立。数组必须
   非空、去重，且每个 agent 都由该条目的至少一条 route 支持。多个当前可用、可见的模型
-  同时标记时按最低 `sortOrder` 消歧；没有标记时回退既有排序默认。
+  同时标记时先按最低数字 `sortOrder` 消歧（缺省排在数字之后），投影到 ListModels 后仍
+  相同时取该响应 `models` 数组中较早的条目；没有标记时回退既有排序默认。`retired` 条目
+  不得携带该字段。
 - `newSessionDefault` 表达策略意图，不表达授权或无条件全区域默认。部署可以按区域产品策略
-  决定是否把该字段发给客户端（例如只在中国大陆部署生效）；公共 Registry 消费者不得据此
-  绕过实时可用性、授权或区域门控。Registry v1 不允许该字段，v2 parser 继续兼容 v1 快照。
+  决定是否把该意图投影到本部署的 ListModels 响应（例如只在中国大陆部署生效）；公共
+  Registry 消费者不得直接据此改变默认，也不得绕过实时可用性、授权或区域门控。区域门控
+  不得在保留同一 `updatedAt` 时改写 Registry；若确需发布区域 Registry 变体，每份不同的
+  canonical JSON 必须使用独立、向前推进的 revision。Registry v1 不允许该字段，v2 parser
+  继续兼容 v1 快照。
 - 动态模型发现与 AIGateway 仍分别决定“当前是否可用”和 XD 的实际可售价格；
   `modelRegistry` 不得把静态条目解释成可用授权，也不得覆盖 Gateway 实价。
 - 参考价格统一为每百万 token，可按输入 token 区间和生效日期声明多档价格。消费者

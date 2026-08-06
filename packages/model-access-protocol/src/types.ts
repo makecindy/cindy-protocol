@@ -119,15 +119,18 @@ export interface ModelRegistryEntry extends ModelRegistryEntryBase {
   /**
    * Agents for which this model is the preferred new-conversation default (the
    * cold-start seed). Independent of `sortOrder` (which only orders the picker) and
-   * `defaultEnabled` (picker visibility): clients prefer a marked model that is
-   * available and visible as the new-session seed, falling back to `sortOrder` when
-   * none is marked (or, when several are, the lowest `sortOrder`). Each listed agent
-   * must be routable by this entry (⊆ the union of route agents).
+   * `defaultEnabled` (picker visibility). After a deployment projects this intent
+   * into ListModels, clients prefer an available and visible marked model, falling
+   * back to `sortOrder` when none is marked. When several are marked, numeric
+   * `sortOrder` sorts first (lower wins and an omitted value sorts after every
+   * number), then the earlier entry in the received ListModels `models` array wins.
+   * Each listed agent must be routable by this entry (⊆ the union of route agents),
+   * and a `retired` entry cannot carry the field.
    *
    * This declares intent, not an unconditional global default. A deployment MAY
-   * region-gate whether it emits this to clients as a regional product policy — so a
-   * model can be the new-session default in one region without becoming a global
-   * default. See MODEL_REGISTRY.md "New-session default".
+   * region-gate when projecting this intent into its ListModels response, but MUST
+   * NOT mutate a Registry snapshot while retaining its `updatedAt`. See
+   * MODEL_REGISTRY.md "New-session default".
    */
   newSessionDefault?: ModelAgent[];
 }
@@ -210,6 +213,12 @@ export interface ModelPricing {
   tieredPricing?: ModelTieredPricing[];
 }
 
+/** Input/output modalities normalized by model-access-server from the live Gateway catalog. */
+export interface ModelModalities {
+  input: string[];
+  output: string[];
+}
+
 export interface ModelAgentOverride {
   contextWindow?: number;
   efforts?: ModelEffort[];
@@ -220,6 +229,8 @@ export interface ModelAgentOverride {
 
 interface ModelCatalogEntryBase extends ModelPricing {
   id: string;
+  /** Gateway-native model classification. Values are passed through without renaming. */
+  mode?: string;
   /**
    * ISO 4217 currency for every price on this entry. The server declares the
    * deployment's accounting currency; clients must not infer it from locale.
@@ -231,6 +242,7 @@ interface ModelCatalogEntryBase extends ModelPricing {
   description?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
+  modalities?: ModelModalities;
   efforts?: ModelEffort[];
   defaultEffort?: ModelEffort;
   sortOrder?: number;
@@ -248,7 +260,10 @@ export interface ModelCatalogEntryV1 extends ModelCatalogEntryBase {
 export interface ModelCatalogEntry extends ModelCatalogEntryBase {
   /**
    * Agents for which this currently available model is the preferred new-conversation default.
-   * The list is non-empty, duplicate-free, and a subset of this entry's `agents`.
+   * The list is non-empty, duplicate-free, and a subset of this entry's `agents`. If several
+   * available and visible entries are marked for one agent, lower numeric `sortOrder` wins,
+   * omitted values sort after every number, and an exact tie is broken by the received `models`
+   * array order.
    */
   newSessionDefault?: ModelAgent[];
 }

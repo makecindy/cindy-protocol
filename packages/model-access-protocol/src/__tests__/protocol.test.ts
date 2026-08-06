@@ -19,11 +19,13 @@ const VALID_RESPONSE: ListModelsResponse = {
   models: [
     {
       id: 'example-chat-model',
+      mode: 'chat',
       currency: 'CNY',
       agents: ['claude-code', 'codex'],
       newSessionDefault: ['claude-code', 'codex'],
       name: 'Example Chat Model',
       contextWindow: 200_000,
+      modalities: { input: ['text', 'image'], output: ['text'] },
       inputCostPerToken: 0.000_001,
       outputCostPerToken: 0.000_002,
       efforts: ['low', 'medium', 'high'],
@@ -113,6 +115,62 @@ describe('model access catalog contract', () => {
     );
   });
 
+  it('enforces the complete per-version ListModels allowlist', () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+    const versions = [
+      [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+    ] as const;
+
+    for (const [schemaVersion, model] of versions) {
+      const response = { schemaVersion, models: [model] };
+      const tier = model.tieredPricing![0]!;
+      const cases: [unknown, string][] = [
+        [{ ...response, producerRevision: 'stale-v2' }, 'response.producerRevision'],
+        [{ ...response, models: [{ ...model, family: 'example' }] }, 'response.models[0].family'],
+        [
+          { ...response, models: [{ ...model, provenance: { source: 'stale-v2' } }] },
+          'response.models[0].provenance',
+        ],
+        [
+          {
+            ...response,
+            models: [
+              {
+                ...model,
+                perAgent: {
+                  'claude-code': { supportsFastMode: false, verified: true },
+                },
+              },
+            ],
+          },
+          'response.models[0].perAgent.claude-code.verified',
+        ],
+        [
+          {
+            ...response,
+            models: [{ ...model, tieredPricing: [{ ...tier, provenance: 'stale-v2' }] }],
+          },
+          'response.models[0].tieredPricing[0].provenance',
+        ],
+        [
+          {
+            ...response,
+            models: [
+              {
+                ...model,
+                modalities: { ...model.modalities!, source: 'stale-v2' },
+              },
+            ],
+          },
+          'response.models[0].modalities.source',
+        ],
+      ];
+
+      for (const [value, path] of cases) expectReject(value, path);
+    }
+  });
+
   it('rejects malformed v2 newSessionDefault values', () => {
     const withDefault = (value: unknown) => ({
       ...VALID_RESPONSE,
@@ -134,6 +192,24 @@ describe('model access catalog contract', () => {
       },
       'response.models[0].newSessionDefault',
     );
+  });
+
+  it('validates existing mode and normalized modalities in both schema versions', () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+    for (const [schemaVersion, model] of [
+      [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+    ] as const) {
+      expect(parseListModelsResponse({ schemaVersion, models: [model] }).ok).toBe(true);
+      expectReject({ schemaVersion, models: [{ ...model, mode: 42 }] }, 'response.models[0].mode');
+      expectReject(
+        {
+          schemaVersion,
+          models: [{ ...model, modalities: { input: ['text', 42], output: ['text'] } }],
+        },
+        'response.models[0].modalities.input',
+      );
+    }
   });
 
   it.each(['CNY', 'USD'] as const)('accepts the supported %s currency', (currency) => {
@@ -284,6 +360,17 @@ describe('public model registry contract', () => {
     };
     expectRegistryReject(
       JSON.parse(JSON.stringify(wire)),
+      'modelRegistry.models[0].newSessionDefault',
+    );
+  });
+
+  it('rejects newSessionDefault on retired registry entries', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    expectRegistryReject(
+      {
+        ...VALID_REGISTRY,
+        models: [{ ...entry, status: 'retired', newSessionDefault: ['claude-code'] }],
+      },
       'modelRegistry.models[0].newSessionDefault',
     );
   });
@@ -544,6 +631,21 @@ describe('public model registry contract', () => {
         models: reordered.models.slice(1),
       }),
     ).not.toBe(modelRegistryCanonicalJson(VALID_REGISTRY));
+
+    const secondModel = {
+      ...VALID_REGISTRY.models[0]!,
+      id: 'example/other-model',
+      routes: [
+        {
+          ...VALID_REGISTRY.models[0]!.routes[0]!,
+          modelId: 'other-model',
+        },
+      ],
+    };
+    const orderedModels = [VALID_REGISTRY.models[0]!, secondModel];
+    expect(modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: orderedModels })).not.toBe(
+      modelRegistryCanonicalJson({ ...VALID_REGISTRY, models: [...orderedModels].reverse() }),
+    );
   });
 
   it('keeps availability and selectability out of the wire schema', () => {
