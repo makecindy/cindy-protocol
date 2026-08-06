@@ -1,29 +1,15 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
-  MODEL_ACCESS_CHAT_MODES,
   MODEL_ACCESS_MODELS_PATH,
-  MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
-  MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   modelRegistryCanonicalJson,
   parseListModelsResponse,
-  parseListModelsResponseV2,
   parseModelRegistry,
-  parseResolveRequest,
-  parseResolveResponse,
   type ListModelsResponse,
-  type ListModelsResponseV2,
-  type ListModelsResponseV2Model,
-  type ModelChatMode,
-  type ModelRegistryV1,
-  type ModelRegistryV2,
-  type ProviderReportedModel,
-  type ResolveRequest,
-  type ResolveResponse,
-  type ResolvedModel,
+  type ModelRegistry,
 } from '../index.js';
 
 const VALID_RESPONSE: ListModelsResponse = {
@@ -53,7 +39,7 @@ const VALID_RESPONSE: ListModelsResponse = {
   ],
 };
 
-const VALID_REGISTRY: ModelRegistryV2 = {
+const VALID_REGISTRY: ModelRegistry = {
   schemaVersion: MODEL_REGISTRY_SCHEMA_VERSION,
   updatedAt: '2026-07-31T00:00:00.000Z',
   models: [
@@ -90,12 +76,6 @@ const VALID_REGISTRY: ModelRegistryV2 = {
       ],
     },
   ],
-};
-
-const VALID_REGISTRY_V1: ModelRegistryV1 = {
-  schemaVersion: MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
-  updatedAt: VALID_REGISTRY.updatedAt,
-  models: VALID_REGISTRY.models.map(({ newSessionDefault: _newSessionDefault, ...entry }) => entry),
 };
 
 function expectReject(value: unknown, path: string): void {
@@ -206,8 +186,6 @@ describe('public model registry contract', () => {
   it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
     const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
     expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
-    const v1Wire = JSON.parse(JSON.stringify(VALID_REGISTRY_V1));
-    expect(parseModelRegistry(v1Wire)).toEqual({ ok: true, value: VALID_REGISTRY_V1 });
   });
 
   it('rejects client provenance and every other field outside the versioned schema', () => {
@@ -287,7 +265,7 @@ describe('public model registry contract', () => {
   });
 
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
-    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 3 }, 'modelRegistry.schemaVersion');
+    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 2 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(
       { ...VALID_REGISTRY, models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]] },
       'modelRegistry.models[1].id',
@@ -408,17 +386,16 @@ describe('public model registry contract', () => {
     );
   });
 
-  it('continues to parse the unchanged materialization-complete v1 wire', () => {
+  it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
     // The exact shape a policy-based client requires before deriving a
     // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
     // availability"): explicit status + self-consistent capability set +
     // per-agent divergence. This policy consumes the existing v1 shape
     // without a schema bump; future field additions still follow the
     // Change gate.
-    expect(MODEL_REGISTRY_LEGACY_SCHEMA_VERSION).toBe(1);
-    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(2);
+    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
     const wire = {
-      ...VALID_REGISTRY_V1,
+      ...VALID_REGISTRY,
       models: [
         {
           ...VALID_REGISTRY.models[0],
@@ -435,47 +412,6 @@ describe('public model registry contract', () => {
       ],
     };
     expect(parseModelRegistry(JSON.parse(JSON.stringify(wire))).ok).toBe(true);
-  });
-
-  it('versions newSessionDefault in v2 and validates its agent routing contract', () => {
-    const entry = VALID_REGISTRY.models[0]!;
-    const marked = {
-      ...VALID_REGISTRY,
-      models: [{ ...entry, newSessionDefault: ['codex'] }],
-    };
-    expect(parseModelRegistry(JSON.parse(JSON.stringify(marked)))).toEqual({
-      ok: true,
-      value: marked,
-    });
-
-    expectRegistryReject(
-      {
-        ...VALID_REGISTRY_V1,
-        models: [{ ...VALID_REGISTRY_V1.models[0]!, newSessionDefault: ['codex'] }],
-      },
-      'modelRegistry.models[0].newSessionDefault',
-    );
-
-    for (const newSessionDefault of [[], ['codex', 'codex'], ['other']]) {
-      expectRegistryReject(
-        { ...VALID_REGISTRY, models: [{ ...entry, newSessionDefault }] },
-        'modelRegistry.models[0].newSessionDefault',
-      );
-    }
-
-    expectRegistryReject(
-      {
-        ...VALID_REGISTRY,
-        models: [
-          {
-            ...entry,
-            routes: [{ ...entry.routes[0]!, agents: ['claude-code'] }],
-            newSessionDefault: ['codex'],
-          },
-        ],
-      },
-      'modelRegistry.models[0].newSessionDefault.codex',
-    );
   });
 
   it.each(MODEL_REGISTRY_STATUSES)('accepts the %s lifecycle status', (status) => {
@@ -580,398 +516,5 @@ describe('public model registry contract', () => {
         'referencePrices[1] overlaps referencePrices[0]',
       );
     }
-  });
-});
-
-describe('model access schema v2', () => {
-  it('exports one closed chat-mode contract for all v2 model shapes', () => {
-    expect(MODEL_ACCESS_CHAT_MODES).toEqual(['chat', 'responses']);
-    expectTypeOf<ResolvedModel['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
-    expectTypeOf<ProviderReportedModel['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
-    expectTypeOf<ListModelsResponseV2Model['mode']>().toEqualTypeOf<ModelChatMode | undefined>();
-  });
-
-  const resolvedModel: ResolvedModel = {
-    id: 'example-chat-model',
-    name: 'Example Chat Model',
-    contextWindow: 200_000,
-    efforts: ['low', 'medium', 'high'],
-    defaultEffort: 'medium',
-    category: 'gpt',
-    mode: 'chat',
-    modalities: { input: ['text'], output: ['text'] },
-    capabilities: { reasoning: true, toolCall: true },
-    provenance: 'provider',
-  };
-
-  const resolveRequest: ResolveRequest = {
-    schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
-    entries: [
-      {
-        providerId: 'openrouter',
-        agent: 'codex',
-        wireProtocol: 'openai-responses',
-        models: [
-          {
-            id: 'unknown-vendor-model',
-            providerReported: {
-              contextWindow: 200_000,
-              maxOutput: 8_192,
-              modalities: { input: ['text'], output: ['text'] },
-              capabilities: { reasoning: true },
-              mode: 'chat',
-            },
-          },
-        ],
-      },
-    ],
-  };
-
-  const resolveResponse: ResolveResponse = {
-    schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
-    knowledgeRevision: 'models-dev-2026-07-31',
-    entries: [{ providerId: 'openrouter', agent: 'codex', models: [resolvedModel] }],
-  };
-
-  const listModelsV2Response: ListModelsResponseV2 = {
-    schemaVersion: MODEL_ACCESS_RESOLVE_SCHEMA_VERSION,
-    models: [
-      {
-        ...VALID_RESPONSE.models[0]!,
-        maxOutput: 8_192,
-        category: 'gpt',
-        mode: 'chat',
-        modalities: { input: ['text'], output: ['text'] },
-        capabilities: { reasoning: true },
-        newSessionDefault: ['codex'],
-        provenance: {
-          contextWindow: 'provider',
-          capabilities: 'knowledge-base',
-        },
-      },
-    ],
-  };
-
-  it('parses resolve requests with provider-reported facts and unknown ids', () => {
-    expect(parseResolveRequest(JSON.parse(JSON.stringify(resolveRequest)))).toEqual({
-      ok: true,
-      value: resolveRequest,
-    });
-  });
-
-  it('parses resolved responses and rejects malformed metadata without clearing snapshots', () => {
-    expect(parseResolveResponse(JSON.parse(JSON.stringify(resolveResponse)))).toEqual({
-      ok: true,
-      value: resolveResponse,
-    });
-    const result = parseResolveResponse({
-      ...resolveResponse,
-      entries: [
-        { ...resolveResponse.entries[0]!, models: [{ ...resolvedModel, contextWindow: 0 }] },
-      ],
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('contextWindow');
-
-    for (const sortOrder of ['first', Number.NaN, Number.POSITIVE_INFINITY]) {
-      const malformedSortOrder = parseResolveResponse({
-        ...resolveResponse,
-        entries: [{ ...resolveResponse.entries[0]!, models: [{ ...resolvedModel, sortOrder }] }],
-      });
-      expect(malformedSortOrder.ok).toBe(false);
-      if (!malformedSortOrder.ok) expect(malformedSortOrder.error).toContain('sortOrder');
-    }
-  });
-
-  it('parses the additive ListModels v2 envelope, including an empty list', () => {
-    expect(parseListModelsResponseV2(JSON.parse(JSON.stringify(listModelsV2Response)))).toEqual({
-      ok: true,
-      value: listModelsV2Response,
-    });
-    expect(parseListModelsResponseV2({ schemaVersion: 2, models: [] })).toEqual({
-      ok: true,
-      value: { schemaVersion: 2, models: [] },
-    });
-
-    const unsupportedDefault = parseListModelsResponseV2({
-      ...listModelsV2Response,
-      models: [
-        {
-          ...listModelsV2Response.models[0]!,
-          agents: ['claude-code'],
-          newSessionDefault: ['codex'],
-        },
-      ],
-    });
-    expect(unsupportedDefault.ok).toBe(false);
-    if (!unsupportedDefault.ok) expect(unsupportedDefault.error).toContain('newSessionDefault');
-  });
-
-  it('rejects undocumented chat modes across all v2 parsers', () => {
-    const requestModel = resolveRequest.entries[0]!.models[0]!;
-    const providerReported = requestModel.providerReported!;
-    const cases = [
-      parseResolveRequest({
-        ...resolveRequest,
-        entries: [
-          {
-            ...resolveRequest.entries[0]!,
-            models: [
-              {
-                ...requestModel,
-                providerReported: { ...providerReported, mode: 'completion' },
-              },
-            ],
-          },
-        ],
-      }),
-      parseResolveResponse({
-        ...resolveResponse,
-        entries: [
-          {
-            ...resolveResponse.entries[0]!,
-            models: [{ ...resolvedModel, mode: 'embedding' }],
-          },
-        ],
-      }),
-      parseListModelsResponseV2({
-        ...listModelsV2Response,
-        models: [{ ...listModelsV2Response.models[0]!, mode: 'completion' }],
-      }),
-    ];
-
-    for (const result of cases) {
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toContain('.mode');
-    }
-  });
-
-  it('rejects unknown fields at every fixed-shape v2 layer', () => {
-    const requestEntry = resolveRequest.entries[0]!;
-    const requestModel = requestEntry.models[0]!;
-    const providerReported = requestModel.providerReported!;
-    const responseEntry = resolveResponse.entries[0]!;
-    const listModel = listModelsV2Response.models[0]!;
-    const cases = [
-      [parseResolveRequest({ ...resolveRequest, extra: true }), 'request.extra'],
-      [
-        parseResolveRequest({
-          ...resolveRequest,
-          entries: [{ ...requestEntry, extra: true }],
-        }),
-        'request.entries[0].extra',
-      ],
-      [
-        parseResolveRequest({
-          ...resolveRequest,
-          entries: [{ ...requestEntry, models: [{ ...requestModel, extra: true }] }],
-        }),
-        'request.entries[0].models[0].extra',
-      ],
-      [
-        parseResolveRequest({
-          ...resolveRequest,
-          entries: [
-            {
-              ...requestEntry,
-              models: [
-                {
-                  ...requestModel,
-                  providerReported: { ...providerReported, maxOutpt: 8_192 },
-                },
-              ],
-            },
-          ],
-        }),
-        'request.entries[0].models[0].providerReported.maxOutpt',
-      ],
-      [
-        parseResolveRequest({
-          ...resolveRequest,
-          entries: [
-            {
-              ...requestEntry,
-              models: [
-                {
-                  ...requestModel,
-                  providerReported: {
-                    ...providerReported,
-                    modalities: { ...providerReported.modalities!, extra: [] },
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-        'request.entries[0].models[0].providerReported.modalities.extra',
-      ],
-      [parseResolveResponse({ ...resolveResponse, extra: true }), 'response.extra'],
-      [
-        parseResolveResponse({
-          ...resolveResponse,
-          entries: [{ ...responseEntry, extra: true }],
-        }),
-        'response.entries[0].extra',
-      ],
-      [
-        parseResolveResponse({
-          ...resolveResponse,
-          entries: [{ ...responseEntry, models: [{ ...resolvedModel, default_enabled: true }] }],
-        }),
-        'response.entries[0].models[0].default_enabled',
-      ],
-      [
-        parseResolveResponse({
-          ...resolveResponse,
-          entries: [
-            {
-              ...responseEntry,
-              models: [{ ...resolvedModel, cost: { input: 1, cacheReads: 2 } }],
-            },
-          ],
-        }),
-        'response.entries[0].models[0].cost.cacheReads',
-      ],
-      [parseListModelsResponseV2({ ...listModelsV2Response, extra: true }), 'response.extra'],
-      [
-        parseListModelsResponseV2({
-          ...listModelsV2Response,
-          models: [{ ...listModel, maxOutpt: 8_192 }],
-        }),
-        'response.models[0].maxOutpt',
-      ],
-      [
-        parseListModelsResponseV2({
-          ...listModelsV2Response,
-          models: [
-            {
-              ...listModel,
-              perAgent: { codex: { supportsFastMode: true, maxOutput: 8_192 } },
-            },
-          ],
-        }),
-        'response.models[0].perAgent.codex.maxOutput',
-      ],
-      [
-        parseListModelsResponseV2({
-          ...listModelsV2Response,
-          models: [
-            {
-              ...listModel,
-              tieredPricing: [{ range: [0, 1], currency: 'USD' }],
-            },
-          ],
-        }),
-        'response.models[0].tieredPricing[0].currency',
-      ],
-    ] as const;
-
-    for (const [result, path] of cases) {
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toContain(path);
-    }
-  });
-
-  it('keeps explicitly open capability and provenance maps additive', () => {
-    const requestEntry = resolveRequest.entries[0]!;
-    const requestModel = requestEntry.models[0]!;
-    expect(
-      parseResolveRequest({
-        ...resolveRequest,
-        entries: [
-          {
-            ...requestEntry,
-            models: [
-              {
-                ...requestModel,
-                providerReported: {
-                  ...requestModel.providerReported!,
-                  capabilities: { reasoning: true, futureCapability: true },
-                },
-              },
-            ],
-          },
-        ],
-      }).ok,
-    ).toBe(true);
-
-    expect(
-      parseResolveResponse({
-        ...resolveResponse,
-        entries: [
-          {
-            ...resolveResponse.entries[0]!,
-            models: [
-              {
-                ...resolvedModel,
-                provenance: { contextWindow: 'provider', futureField: 'default' },
-              },
-            ],
-          },
-        ],
-      }).ok,
-    ).toBe(true);
-  });
-
-  it('rejects unsupported agents, duplicate provider entries, and invalid provenance', () => {
-    const badAgent = {
-      schemaVersion: 2,
-      entries: [{ providerId: 'p', agent: 'other', models: [] }],
-    };
-    expect(parseResolveRequest(badAgent).ok).toBe(false);
-    const duplicateEntries = {
-      schemaVersion: 2,
-      knowledgeRevision: 'r1',
-      entries: [
-        { providerId: 'p', agent: 'codex', models: [resolvedModel] },
-        { providerId: 'p', agent: 'codex', models: [resolvedModel] },
-      ],
-    };
-    expect(parseResolveResponse(duplicateEntries).ok).toBe(false);
-    const badProvenance = {
-      schemaVersion: 2,
-      knowledgeRevision: 'r1',
-      entries: [
-        { providerId: 'p', agent: 'codex', models: [{ ...resolvedModel, provenance: 'other' }] },
-      ],
-    };
-    expect(parseResolveResponse(badProvenance).ok).toBe(false);
-  });
-
-  it('accepts the resolver per-field provenance map, rejecting maps with an unsupported value', () => {
-    // 服务端 enrichment 逐字段发 provenance(每个字段来自 provider/override/knowledge-base/default)。
-    const perFieldProvenance = {
-      schemaVersion: 2,
-      knowledgeRevision: 'r1',
-      entries: [
-        {
-          providerId: 'p',
-          agent: 'codex',
-          models: [
-            {
-              ...resolvedModel,
-              provenance: {
-                id: 'provider',
-                contextWindow: 'override',
-                modalities: 'knowledge-base',
-                category: 'default',
-              },
-            },
-          ],
-        },
-      ],
-    };
-    expect(parseResolveResponse(JSON.parse(JSON.stringify(perFieldProvenance))).ok).toBe(true);
-    const badValueInMap = {
-      ...perFieldProvenance,
-      entries: [
-        {
-          providerId: 'p',
-          agent: 'codex',
-          models: [{ ...resolvedModel, provenance: { contextWindow: 'bogus' } }],
-        },
-      ],
-    };
-    expect(parseResolveResponse(badValueInMap).ok).toBe(false);
   });
 });
