@@ -7,6 +7,9 @@ export const CINDY_FILE_EXT = '.cindy';
 /** ghost.json 格式版本；与 Plugin HTTP API envelope 版本独立演进。 */
 export const GHOST_MANIFEST_SCHEMA_VERSION = 2 as const;
 
+/** ghost.json 的 description / whenToUse 字符上限。 */
+export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
+
 /** Cindy host locales supported by Plugin manifest resources. */
 export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
 export type GhostLocale = (typeof GHOST_LOCALES)[number];
@@ -1152,17 +1155,23 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     raw.description !== undefined &&
     (typeof raw.description !== 'string' ||
       raw.description.trim().length === 0 ||
-      raw.description.length > 300)
+      raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'description 必须是 1–300 字符的非空字符串' };
+    return {
+      ok: false,
+      reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (
     raw.whenToUse !== undefined &&
     (typeof raw.whenToUse !== 'string' ||
       raw.whenToUse.trim().length === 0 ||
-      raw.whenToUse.length > 300)
+      raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'whenToUse 必须是 1–300 字符的非空字符串' };
+    return {
+      ok: false,
+      reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (raw.icon !== undefined) {
     if (!isSafeGhostRelativePath(raw.icon)) {

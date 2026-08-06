@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_OAUTH_SCOPES_MAX,
   compareCindyVersions,
@@ -62,6 +63,27 @@ describe('Ghost manifest contract', () => {
   it('rejects invalid ids and schema versions', () => {
     expect(isValidGhostId('../escape')).toBe(false);
     expect(validateGhostManifest({ ...validManifest, schemaVersion: 1 }).ok).toBe(false);
+  });
+
+  it('shares the 300-character limit across description and whenToUse', () => {
+    expect(GHOST_MANIFEST_SUMMARY_MAX_CHARS).toBe(300);
+    for (const field of ['description', 'whenToUse'] as const) {
+      expect(
+        validateGhostManifest({
+          ...validManifest,
+          [field]: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+        }).ok,
+      ).toBe(true);
+      expect(
+        validateGhostManifest({
+          ...validManifest,
+          [field]: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+        }),
+      ).toEqual({
+        ok: false,
+        reason: `${field} 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+      });
+    }
   });
 
   it('accepts an oidc-token secret without a settings page and normalizes its exact host', () => {
