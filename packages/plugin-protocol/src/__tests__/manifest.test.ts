@@ -109,7 +109,9 @@ describe('Ghost manifest contract', () => {
     });
   });
 
-  it('normalizes inject.hosts order deterministically (stable permission detail/diff)', () => {
+  it('keeps legacy host-only inject.hosts order unchanged (manifestDigest compatibility)', () => {
+    // 旧清单的归一化输出必须与升级前逐字节一致:manifestDigest 按数组原始顺序
+    // 计算,排序会让已装插件的账本摘要永久失配。
     const result = validateGhostManifest({
       ...validManifest,
       tools: undefined,
@@ -125,6 +127,36 @@ describe('Ghost manifest contract', () => {
               header: 'Authorization',
               format: 'Bearer {value}',
               hosts: ['cdn.example.com', 'api.example.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'cdn.example.com',
+      'api.example.com',
+    ]);
+  });
+
+  it('sorts inject.hosts once endpoint fields are declared (stable permission detail/diff)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['cdn.example.com', 'api.example.com'],
+              paths: ['/v1/convert'],
             },
           },
         ],

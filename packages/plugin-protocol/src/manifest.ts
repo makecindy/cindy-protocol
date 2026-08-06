@@ -1599,9 +1599,6 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             }
             injectHosts.push(ihNorm);
           }
-          // 与 paths / methods 同款排序归一化:host 顺序的无意义变动不该引起
-          // 权限 detail / diff 抖动。
-          injectHosts.sort();
         }
         let injectPaths: string[] | undefined;
         if (inj.paths !== undefined) {
@@ -1664,6 +1661,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           injectMethods.sort(
             (a, b) => GHOST_FETCH_METHODS.indexOf(a) - GHOST_FETCH_METHODS.indexOf(b),
           );
+        }
+        // 排序归一化只对声明了新字段(inject.paths / inject.methods)的凭证生效:
+        // 旧 host-only 清单的归一化输出必须与升级前逐字节一致(manifestDigest 按
+        // 数组原始顺序计算,排序会让已装插件的账本摘要永久失配)。
+        if (injectHosts !== undefined && (injectPaths !== undefined || injectMethods !== undefined)) {
+          injectHosts.sort();
         }
         if (oidcManaged) {
           if (inj.header !== 'Authorization' || inj.format !== 'Bearer {value}') {
