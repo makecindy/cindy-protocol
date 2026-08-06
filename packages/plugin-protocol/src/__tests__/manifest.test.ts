@@ -109,6 +109,35 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  it('normalizes inject.hosts order deterministically (stable permission detail/diff)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['cdn.example.com', 'api.example.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'api.example.com',
+      'cdn.example.com',
+    ]);
+  });
+
   it('rejects ambiguous endpoint paths and unsupported methods', () => {
     const validateInject = (inject: Record<string, unknown>) =>
       validateGhostManifest({
