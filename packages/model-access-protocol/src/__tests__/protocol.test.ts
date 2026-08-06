@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
+  MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   modelRegistryCanonicalJson,
@@ -19,6 +21,7 @@ const VALID_RESPONSE: ListModelsResponse = {
       id: 'example-chat-model',
       currency: 'CNY',
       agents: ['claude-code', 'codex'],
+      newSessionDefault: ['claude-code', 'codex'],
       name: 'Example Chat Model',
       contextWindow: 200_000,
       inputCostPerToken: 0.000_001,
@@ -93,6 +96,46 @@ describe('model access catalog contract', () => {
     expect(MODEL_ACCESS_MODELS_PATH).toBe('/api/model-access/models');
   });
 
+  it('continues to parse v1 responses, while v1 rejects the v2-only default field', () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+    const legacy = {
+      ...VALID_RESPONSE,
+      schemaVersion: MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
+      models: [legacyModel],
+    };
+    expect(parseListModelsResponse(JSON.parse(JSON.stringify(legacy))).ok).toBe(true);
+    expectReject(
+      {
+        ...legacy,
+        models: [{ ...legacyModel, newSessionDefault: ['claude-code'] }],
+      },
+      'response.models[0].newSessionDefault',
+    );
+  });
+
+  it('rejects malformed v2 newSessionDefault values', () => {
+    const withDefault = (value: unknown) => ({
+      ...VALID_RESPONSE,
+      models: [{ ...VALID_RESPONSE.models[0], newSessionDefault: value }],
+    });
+    expectReject(withDefault([]), 'response.models[0].newSessionDefault');
+    expectReject(withDefault(['codex', 'codex']), 'response.models[0].newSessionDefault');
+    expectReject(withDefault(['pi']), 'response.models[0].newSessionDefault');
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [
+          {
+            ...VALID_RESPONSE.models[0],
+            agents: ['claude-code'],
+            newSessionDefault: ['codex'],
+          },
+        ],
+      },
+      'response.models[0].newSessionDefault',
+    );
+  });
+
   it.each(['CNY', 'USD'] as const)('accepts the supported %s currency', (currency) => {
     const result = parseListModelsResponse({
       ...VALID_RESPONSE,
@@ -114,7 +157,7 @@ describe('model access catalog contract', () => {
   });
 
   it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 2 }, 'response.schemaVersion');
+    expectReject({ ...VALID_RESPONSE, schemaVersion: 3 }, 'response.schemaVersion');
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -166,6 +209,7 @@ describe('model access catalog contract', () => {
           {
             ...VALID_RESPONSE.models[0],
             agents: ['claude-code'],
+            newSessionDefault: ['claude-code'],
             perAgent: { codex: { supportsFastMode: true } },
           },
         ],
@@ -186,6 +230,62 @@ describe('public model registry contract', () => {
   it('round-trips canonical metadata, provider routes, and sourced reference prices', () => {
     const wire = JSON.parse(JSON.stringify(VALID_REGISTRY));
     expect(parseModelRegistry(wire)).toEqual({ ok: true, value: VALID_REGISTRY });
+  });
+
+  it('continues to parse legacy v1 registries, while v1 rejects the v2-only field', () => {
+    const legacy = {
+      ...VALID_REGISTRY,
+      schemaVersion: MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
+    };
+    expect(parseModelRegistry(JSON.parse(JSON.stringify(legacy))).ok).toBe(true);
+    expectRegistryReject(
+      {
+        ...legacy,
+        models: [{ ...legacy.models[0], newSessionDefault: ['claude-code'] }],
+      },
+      'modelRegistry.models[0].newSessionDefault',
+    );
+  });
+
+  it('accepts newSessionDefault as a subset of the entry route agents', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    const wire = {
+      ...VALID_REGISTRY,
+      models: [{ ...entry, newSessionDefault: ['claude-code', 'codex'] }],
+    };
+    const result = parseModelRegistry(JSON.parse(JSON.stringify(wire)));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value.models[0]!.newSessionDefault).toEqual(['claude-code', 'codex']);
+  });
+
+  it('rejects a malformed newSessionDefault (empty / duplicate / unknown agent)', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    const withDefault = (v: unknown) => ({
+      ...VALID_REGISTRY,
+      models: [{ ...entry, newSessionDefault: v }],
+    });
+    expectRegistryReject(withDefault([]), 'modelRegistry.models[0].newSessionDefault');
+    expectRegistryReject(
+      withDefault(['claude-code', 'claude-code']),
+      'modelRegistry.models[0].newSessionDefault',
+    );
+    expectRegistryReject(withDefault(['bogus-agent']), 'modelRegistry.models[0].newSessionDefault');
+  });
+
+  it('rejects newSessionDefault agents not backed by any route', () => {
+    const entry = VALID_REGISTRY.models[0]!;
+    const route = entry.routes[0]!;
+    const wire = {
+      ...VALID_REGISTRY,
+      models: [
+        { ...entry, routes: [{ ...route, agents: ['claude-code'] }], newSessionDefault: ['codex'] },
+      ],
+    };
+    expectRegistryReject(
+      JSON.parse(JSON.stringify(wire)),
+      'modelRegistry.models[0].newSessionDefault',
+    );
   });
 
   it('rejects client provenance and every other field outside the versioned schema', () => {
@@ -265,7 +365,7 @@ describe('public model registry contract', () => {
   });
 
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {
-    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 2 }, 'modelRegistry.schemaVersion');
+    expectRegistryReject({ ...VALID_REGISTRY, schemaVersion: 3 }, 'modelRegistry.schemaVersion');
     expectRegistryReject(
       { ...VALID_REGISTRY, models: [VALID_REGISTRY.models[0], VALID_REGISTRY.models[0]] },
       'modelRegistry.models[1].id',
@@ -386,14 +486,12 @@ describe('public model registry contract', () => {
     );
   });
 
-  it('carries a materialization-complete presence shape on the unchanged v1 wire', () => {
+  it('carries a materialization-complete presence shape on the current v2 wire', () => {
     // The exact shape a policy-based client requires before deriving a
     // selectable entry (MODEL_REGISTRY.md "Presence, entitlement, and sale
     // availability"): explicit status + self-consistent capability set +
-    // per-agent divergence. This policy consumes the existing v1 shape
-    // without a schema bump; future field additions still follow the
-    // Change gate.
-    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(1);
+    // per-agent divergence.
+    expect(MODEL_REGISTRY_SCHEMA_VERSION).toBe(2);
     const wire = {
       ...VALID_REGISTRY,
       models: [

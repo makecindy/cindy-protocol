@@ -1,5 +1,8 @@
-/** Initial version of the Cindy model catalog response contract. */
-export const MODEL_ACCESS_CATALOG_SCHEMA_VERSION = 1 as const;
+/** Legacy version of the Cindy model catalog response contract. */
+export const MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION = 1 as const;
+
+/** Current version of the Cindy model catalog response contract. */
+export const MODEL_ACCESS_CATALOG_SCHEMA_VERSION = 2 as const;
 
 /** Stable Cindy-owned model catalog path. */
 export const MODEL_ACCESS_MODELS_PATH = '/api/model-access/models' as const;
@@ -21,8 +24,11 @@ export const MODEL_ACCESS_EFFORTS = [
 ] as const;
 export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 
-/** Version of the provider-independent public model registry embedded in Catalog. */
-export const MODEL_REGISTRY_SCHEMA_VERSION = 1 as const;
+/** Legacy version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
+
+/** Current version of the provider-independent public model registry embedded in Catalog. */
+export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 
 /**
  * Lifecycle signal. `retired` is the explicit end-of-life tombstone; the
@@ -85,7 +91,7 @@ export interface ModelRegistryRoute {
   referencePrices?: ModelReferencePrice[];
 }
 
-export interface ModelRegistryEntry {
+interface ModelRegistryEntryBase {
   /** Stable provider-independent Cindy id, for example `openai/gpt-5.6-terra`. */
   id: string;
   name: string;
@@ -103,15 +109,54 @@ export interface ModelRegistryEntry {
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
 }
 
+/** Registry v1 entry. The strict v1 wire contract does not allow new-session defaults. */
+export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
+  newSessionDefault?: never;
+}
+
+/** Current Registry entry (schema v2). */
+export interface ModelRegistryEntry extends ModelRegistryEntryBase {
+  /**
+   * Agents for which this model is the preferred new-conversation default (the
+   * cold-start seed). Independent of `sortOrder` (which only orders the picker) and
+   * `defaultEnabled` (picker visibility): clients prefer a marked model that is
+   * available and visible as the new-session seed, falling back to `sortOrder` when
+   * none is marked (or, when several are, the lowest `sortOrder`). Each listed agent
+   * must be routable by this entry (⊆ the union of route agents).
+   *
+   * This declares intent, not an unconditional global default. A deployment MAY
+   * region-gate whether it emits this to clients as a regional product policy — so a
+   * model can be the new-session default in one region without becoming a global
+   * default. See MODEL_REGISTRY.md "New-session default".
+   */
+  newSessionDefault?: ModelAgent[];
+}
+
 /**
  * Public provider-independent metadata and reference-price registry.
  * This object is embedded as `Catalog.modelRegistry` in the public catalog JSON.
  */
-export interface ModelRegistry {
-  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
+interface ModelRegistryBase {
   /** Canonical UTC ISO timestamp (`Date#toISOString`) for the immutable registry snapshot. */
   updatedAt: string;
+}
+
+/**
+ * Source-compatible Registry shape. Runtime parsing still enforces the exact per-version
+ * allowlist; builders that need compile-time precision should use ModelRegistryV1/V2.
+ */
+export interface ModelRegistry extends ModelRegistryBase {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION;
   models: ModelRegistryEntry[];
+}
+
+export interface ModelRegistryV1 extends ModelRegistryBase {
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION;
+  models: ModelRegistryEntryV1[];
+}
+
+export interface ModelRegistryV2 extends ModelRegistry {
+  schemaVersion: typeof MODEL_REGISTRY_SCHEMA_VERSION;
 }
 
 export interface ModelTieredPricing {
@@ -173,7 +218,7 @@ export interface ModelAgentOverride {
   defaultEnabled?: boolean;
 }
 
-export interface ModelCatalogEntry extends ModelPricing {
+interface ModelCatalogEntryBase extends ModelPricing {
   id: string;
   /**
    * ISO 4217 currency for every price on this entry. The server declares the
@@ -194,9 +239,34 @@ export interface ModelCatalogEntry extends ModelPricing {
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
 }
 
+/** ListModels v1 entry. The v1 wire contract does not allow new-session defaults. */
+export interface ModelCatalogEntryV1 extends ModelCatalogEntryBase {
+  newSessionDefault?: never;
+}
+
+/** Current ListModels entry (schema v2). */
+export interface ModelCatalogEntry extends ModelCatalogEntryBase {
+  /**
+   * Agents for which this currently available model is the preferred new-conversation default.
+   * The list is non-empty, duplicate-free, and a subset of this entry's `agents`.
+   */
+  newSessionDefault?: ModelAgent[];
+}
+
+/** Source-compatible ListModels response; runtime parsing remains strict per version. */
 export interface ListModelsResponse {
-  schemaVersion: typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
+  schemaVersion:
+    typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
   models: ModelCatalogEntry[];
+}
+
+export interface ListModelsResponseV1 {
+  schemaVersion: typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION;
+  models: ModelCatalogEntryV1[];
+}
+
+export interface ListModelsResponseV2 extends ListModelsResponse {
+  schemaVersion: typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
 }
 
 export type ModelAccessParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

@@ -81,6 +81,26 @@ concern; routes never name them.
   clients must not infer deletion or retirement from absence, and
   discovery-proven models legitimately continue to exist.
 
+## New-session default
+
+Registry schema v2 adds the optional `newSessionDefault` field to a model entry. Its value is a
+non-empty, duplicate-free list of agents, and every listed agent MUST be supported by at least one
+route on that entry.
+
+The field declares that the model is the preferred **new-conversation cold-start seed** for those
+agents. It is independent of `sortOrder` (picker ordering) and `defaultEnabled` (picker visibility):
+a client should prefer an available, visible marked model, fall back to `sortOrder` when none is
+marked, and use the lowest `sortOrder` when multiple available models are marked.
+
+This is policy intent, not entitlement and not an unconditional cross-region default. The model
+still has to be present and available through a live route. A deployment MAY region-gate whether it
+emits the field to clients as a regional product policy. For example, a model may be the default in
+a Mainland China deployment without becoming the Global default. Consumers of a public Registry
+snapshot must not infer entitlement or bypass a deployment's regional policy from this field.
+
+Registry v1 does not allow `newSessionDefault`; v2 consumers continue to accept v1 snapshots for
+compatibility, applying the existing `sortOrder` fallback because no v1 entry can carry the field.
+
 ## Revision discipline
 
 `updatedAt` identifies an immutable complete Registry snapshot. Two snapshots

@@ -1,9 +1,11 @@
 import {
   MODEL_ACCESS_AGENTS,
+  MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
   MODEL_PRICE_VARIANTS,
+  MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
@@ -57,7 +59,7 @@ const PRICING_FIELDS = [
 ] as const;
 
 const MODEL_REGISTRY_FIELDS = ['schemaVersion', 'updatedAt', 'models'] as const;
-const MODEL_REGISTRY_ENTRY_FIELDS = [
+const MODEL_REGISTRY_ENTRY_V1_FIELDS = [
   'id',
   'name',
   'routes',
@@ -72,6 +74,10 @@ const MODEL_REGISTRY_ENTRY_FIELDS = [
   'supportsFastMode',
   'defaultEnabled',
   'perAgent',
+] as const;
+const MODEL_REGISTRY_ENTRY_V2_FIELDS = [
+  ...MODEL_REGISTRY_ENTRY_V1_FIELDS,
+  'newSessionDefault',
 ] as const;
 const MODEL_REGISTRY_ROUTE_FIELDS = ['providerId', 'modelId', 'agents', 'referencePrices'] as const;
 const MODEL_REGISTRY_AGENT_OVERRIDE_FIELDS = [
@@ -287,7 +293,33 @@ function tieredPricingError(value: unknown, path: string): string | null {
   return null;
 }
 
-function modelEntryError(value: unknown, path: string): string | null {
+function newSessionDefaultError(
+  value: unknown,
+  path: string,
+  supportedAgents: ReadonlySet<ModelAgent>,
+): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0) {
+    return `${path} must be a non-empty array when present`;
+  }
+  const seen = new Set<ModelAgent>();
+  for (const agent of value) {
+    if (!isModelAgent(agent)) return `${path} must contain only supported agents`;
+    if (seen.has(agent)) return `${path} must not contain duplicates`;
+    seen.add(agent);
+    if (!supportedAgents.has(agent)) {
+      return `${path} agents must be supported by the model entry`;
+    }
+  }
+  return null;
+}
+
+function modelEntryError(
+  value: unknown,
+  path: string,
+  schemaVersion:
+    typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
@@ -303,6 +335,20 @@ function modelEntryError(value: unknown, path: string): string | null {
     return `${path}.agents must be a non-empty array of supported agents`;
   }
   const supportedAgents = value.agents as ModelAgent[];
+  if (
+    schemaVersion === MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
+    value.newSessionDefault !== undefined
+  ) {
+    return `${path}.newSessionDefault is not allowed by this schema version`;
+  }
+  if (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+    const defaultError = newSessionDefaultError(
+      value.newSessionDefault,
+      `${path}.newSessionDefault`,
+      new Set(supportedAgents),
+    );
+    if (defaultError) return defaultError;
+  }
 
   for (const [key, max] of [
     ['name', 256],
@@ -367,8 +413,13 @@ export function parseListModelsResponse(
   value: unknown,
 ): ModelAccessParseResult<ListModelsResponse> {
   if (!isPlainObject(value)) return fail('response must be an object');
-  if (value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
-    return fail(`response.schemaVersion must be ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`);
+  if (
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+  ) {
+    return fail(
+      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION} or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+    );
   }
   if (!Array.isArray(value.models)) return fail('response.models must be an array');
   const modelIds = new Set<string>();
@@ -379,7 +430,7 @@ export function parseListModelsResponse(
       }
       modelIds.add(model.id);
     }
-    const error = modelEntryError(model, `response.models[${index}]`);
+    const error = modelEntryError(model, `response.models[${index}]`, value.schemaVersion);
     if (error) return fail(error);
   }
   return ok(value as unknown as ListModelsResponse);
@@ -488,9 +539,19 @@ function registryRouteError(value: unknown, path: string): string | null {
   return null;
 }
 
-function registryEntryError(value: unknown, path: string): string | null {
+function registryEntryError(
+  value: unknown,
+  path: string,
+  schemaVersion: typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION | typeof MODEL_REGISTRY_SCHEMA_VERSION,
+): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
-  let error = unknownFieldError(value, MODEL_REGISTRY_ENTRY_FIELDS, path);
+  let error = unknownFieldError(
+    value,
+    schemaVersion === MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
+      ? MODEL_REGISTRY_ENTRY_V1_FIELDS
+      : MODEL_REGISTRY_ENTRY_V2_FIELDS,
+    path,
+  );
   if (error) return error;
   if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256) {
     return `${path}.id must be a non-empty string of at most 256 characters`;
@@ -569,6 +630,14 @@ function registryEntryError(value: unknown, path: string): string | null {
       if (error) return error;
     }
   }
+  if (schemaVersion === MODEL_REGISTRY_SCHEMA_VERSION) {
+    const defaultError = newSessionDefaultError(
+      value.newSessionDefault,
+      `${path}.newSessionDefault`,
+      supportedAgents,
+    );
+    if (defaultError) return defaultError;
+  }
   return null;
 }
 
@@ -576,8 +645,13 @@ export function parseModelRegistry(value: unknown): ModelAccessParseResult<Model
   if (!isPlainObject(value)) return fail('modelRegistry must be an object');
   const unknownField = unknownFieldError(value, MODEL_REGISTRY_FIELDS, 'modelRegistry');
   if (unknownField) return fail(unknownField);
-  if (value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION) {
-    return fail(`modelRegistry.schemaVersion must be ${MODEL_REGISTRY_SCHEMA_VERSION}`);
+  if (
+    value.schemaVersion !== MODEL_REGISTRY_LEGACY_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION
+  ) {
+    return fail(
+      `modelRegistry.schemaVersion must be ${MODEL_REGISTRY_LEGACY_SCHEMA_VERSION} or ${MODEL_REGISTRY_SCHEMA_VERSION}`,
+    );
   }
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail('modelRegistry.updatedAt must be an ISO timestamp');
@@ -591,7 +665,7 @@ export function parseModelRegistry(value: unknown): ModelAccessParseResult<Model
       }
       modelIds.add(model.id);
     }
-    const error = registryEntryError(model, `modelRegistry.models[${index}]`);
+    const error = registryEntryError(model, `modelRegistry.models[${index}]`, value.schemaVersion);
     if (error) return fail(error);
   }
   return ok(value as unknown as ModelRegistry);
