@@ -713,6 +713,11 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /**
+   * 安装此 Release 所需的最低 Cindy 客户端版本。缺省表示不限制客户端版本；
+   * 声明时必须是合法 SemVer，客户端与 Plugin Server 使用同一比较语义。
+   */
+  minCindyVersion?: string;
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
@@ -871,6 +876,88 @@ export function isSafeGhostRelativePath(p: unknown): p is string {
 export type ManifestValidation =
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
 
+interface ParsedCindyVersion {
+  core: readonly [string, string, string];
+  prerelease: readonly { numeric: boolean; value: string }[];
+}
+
+function compareNumericIdentifiers(left: string, right: string): -1 | 0 | 1 {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function parseCindyVersion(value: string): ParsedCindyVersion | null {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      value,
+    );
+  if (!match) return null;
+  const core = [match[1], match[2], match[3]] as [string, string, string];
+  const prerelease: Array<{ numeric: boolean; value: string }> = [];
+  for (const part of match[4]?.split('.') ?? []) {
+    const numeric = /^\d+$/.test(part);
+    if (numeric && !/^(0|[1-9]\d*)$/.test(part)) return null;
+    prerelease.push({ numeric, value: part });
+  }
+  return { core, prerelease };
+}
+
+/** 判断值是否是可参与兼容性比较的 Cindy SemVer。 */
+export function isValidCindyVersion(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 32 && parseCindyVersion(value) !== null;
+}
+
+/** 开发构建没有正式版本号，按当前源码兼容处理。 */
+export function isVersionlessCindyVersion(value: string): boolean {
+  return value === '0.0.0' || value.startsWith('0.0.0-');
+}
+
+/** 按 SemVer 2.0.0 比较两个 Cindy 版本；任一格式非法时返回 null。 */
+export function compareCindyVersions(leftValue: string, rightValue: string): -1 | 0 | 1 | null {
+  const left = parseCindyVersion(leftValue);
+  const right = parseCindyVersion(rightValue);
+  if (!left || !right) return null;
+  for (let index = 0; index < 3; index += 1) {
+    const coreComparison = compareNumericIdentifiers(left.core[index], right.core[index]);
+    if (coreComparison !== 0) return coreComparison;
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length === 0 ? 1 : -1;
+  }
+  const length = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left.prerelease[index];
+    const rightPart = right.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart.numeric !== rightPart.numeric) return leftPart.numeric ? -1 : 1;
+    const partComparison = leftPart.numeric
+      ? compareNumericIdentifiers(leftPart.value, rightPart.value)
+      : leftPart.value === rightPart.value
+        ? 0
+        : leftPart.value < rightPart.value
+          ? -1
+          : 1;
+    if (partComparison !== 0) return partComparison;
+  }
+  return 0;
+}
+
+/** 缺少最低版本即不限制；非法当前版本按不兼容处理。 */
+export function supportsCindyVersion(
+  currentVersion: string,
+  minCindyVersion: string | undefined,
+): boolean {
+  if (minCindyVersion === undefined) return true;
+  if (!isValidCindyVersion(currentVersion) || !isValidCindyVersion(minCindyVersion)) return false;
+  if (isVersionlessCindyVersion(currentVersion)) return true;
+  const comparison = compareCindyVersions(currentVersion, minCindyVersion);
+  return comparison !== null && comparison >= 0;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -905,6 +992,13 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     raw.version.length > 32
   ) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
+  }
+  if (
+    raw.minCindyVersion !== undefined &&
+    (typeof raw.minCindyVersion !== 'string' ||
+      !isValidCindyVersion(raw.minCindyVersion))
+  ) {
+    return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
@@ -2660,6 +2754,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.minCindyVersion !== undefined
+        ? { minCindyVersion: raw.minCindyVersion as string }
+        : {}),
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
       ...(locales !== undefined ? { locales } : {}),

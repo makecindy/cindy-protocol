@@ -289,8 +289,8 @@ try {
 | `scope`               | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。 |
 | `organizationId`      | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
 | `defaultInstall`      | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
-| `currentRelease`      | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
-| `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。              |
+| `currentRelease`      | 服务端为当前客户端选择的 Release；优先服务端 current，不兼容时回退到最近发布且仍有效的历史兼容 Release。列表只含摘要，详情额外包含 manifest。 |
+| `currentRelease.icon` | 所选兼容 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。           |
 | `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
 
 `parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`、顶层 `name/description/author` 与当前 manifest 一致，以及声明 `oidc-token` 的 manifest 只能属于 `organization` scope。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
