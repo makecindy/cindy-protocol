@@ -248,6 +248,32 @@ export type GhostModelImageAction = (typeof GHOST_MODEL_IMAGE_ACTIONS)[number];
 export const GHOST_MODEL_VIDEO_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelVideoAction = (typeof GHOST_MODEL_VIDEO_ACTIONS)[number];
 
+/** cindy 槽·媒体类可申请的动作(deposit=寄存自己手里的媒体字节入总仓)。 */
+export const GHOST_CINDY_MEDIA_ACTIONS = ['deposit'] as const;
+export type GhostCindyMediaAction = (typeof GHOST_CINDY_MEDIA_ACTIONS)[number];
+
+/**
+ * cindy 槽·文本类可申请的动作(2026-07-31 开闸)。
+ *
+ * `oneshot` = 快问快答:意识递一段文字,主机经**轻量任务模型链**(与会话
+ * 起标题、任务一句话总结同一条通道)直答一次并把文字原样递回。不拉起
+ * agent、无工具、无用户权限、不进任何会话——只花模型额度,拿不到任何
+ * 宿主能力。
+ */
+export const GHOST_CINDY_TEXT_ACTIONS = ['oneshot'] as const;
+export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
+
+/**
+ * cindy 槽·向量类可申请的动作(2026-08-04 开闸)。
+ *
+ * `text` = 文本转向量:意识递一批文字,主机经统一 embedding 通道返回等长的
+ * 向量数组。只生成、不存储;向量原样递回意识自己保管。与 text.oneshot
+ * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
+ * 就没法只授权其中一样。
+ */
+export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
+export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
+
 /**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
@@ -259,6 +285,20 @@ export interface GhostCindyNeeds {
   image?: GhostModelImageAction[];
   /** 视频类:generate=文生视频,edit=参考图生视频(源图仅限本意识名下媒体,1–2 张首/尾帧)。 */
   video?: GhostModelVideoAction[];
+  /** 媒体类:deposit=寄存自己手里的媒体字节入总仓(换指纹,兼授权 release_media)。 */
+  media?: GhostCindyMediaAction[];
+  /** 文本类:oneshot=快问快答(轻量任务模型链直答一次,无 agent 无工具)。 */
+  text?: GhostCindyTextAction[];
+  /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
+  embed?: GhostCindyEmbedAction[];
+  /**
+   * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
+   * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
+   * 未声明处理;用户在详情页的钉档永远优先于本声明。注意:旧宿主会把含本
+   * 字段的身份卡**整份拒装**(cindy 详单未知类目硬拒)——声明前确认目标
+   * 用户群的主机版本。
+   */
+  oneshotModel?: string;
 }
 
 /**
@@ -1240,13 +1280,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
-    // 类目 → 合法动作表(image / video 两类;动作集恰好同名,但按
-    // 类目查表,未来某类目动作分叉时这里天然承接)。
+    // 类目 → 合法动作表(image / video / media / text / embed;动作集恰好
+    // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
       image: GHOST_MODEL_IMAGE_ACTIONS,
       video: GHOST_MODEL_VIDEO_ACTIONS,
+      media: GHOST_CINDY_MEDIA_ACTIONS,
+      text: GHOST_CINDY_TEXT_ACTIONS,
+      embed: GHOST_CINDY_EMBED_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
+      if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
       const allowed = actionTable[category];
       if (!allowed) {
         return {
@@ -1271,10 +1315,27 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         actions.push(a);
       }
       if (category === 'image') cindy.image = actions as GhostModelImageAction[];
-      else cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
+      else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
+      else cindy.embed = actions as GhostCindyEmbedAction[];
     }
-    if (cindy.image === undefined && cindy.video === undefined) {
+    if (cindy.image === undefined && cindy.video === undefined && cindy.media === undefined
+      && cindy.text === undefined && cindy.embed === undefined) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
+    }
+    // oneshotModel(快问快答偏好模型)是标量意图键,不是类目:先摘出,不进类目循环。
+    const oneshotModelRaw = cindyRaw.oneshotModel;
+    if (oneshotModelRaw !== undefined) {
+      if (typeof oneshotModelRaw !== 'string'
+        || oneshotModelRaw.trim().length === 0
+        || oneshotModelRaw.length > 128) {
+        return { ok: false, reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")' };
+      }
+      if (!cindy.text?.includes('oneshot')) {
+        return { ok: false, reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)' };
+      }
+      cindy.oneshotModel = oneshotModelRaw.trim();
     }
   }
 
