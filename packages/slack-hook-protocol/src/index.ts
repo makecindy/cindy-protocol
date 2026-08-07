@@ -17,6 +17,8 @@ export {
   makeTurnEnd,
   makeTurnDelivery,
   makeTurnProgress,
+  makeMessageOp,
+  makeMessageOpResult,
   makeTurnReopen,
   makeBindStart,
   makeBindUpdate,
