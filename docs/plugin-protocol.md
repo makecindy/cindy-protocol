@@ -63,6 +63,34 @@ const manifest: GhostManifest = result.manifest;
 可以发布 49–256 条 scope 的包；仍使用旧协议校验器的 Desktop 会拒绝安装这些包
 并保留现有安装，因此应先升级客户端，再分发超过 48 条 scope 的 Plugin。
 
+### Cindy 托管网页搜索
+
+插件可通过 `cindy.search: ["web"]` 请求 Host 提供 Cindy 托管的公网搜索：
+
+```json
+{
+  "slots": ["tool", "cindy"],
+  "tools": [
+    {
+      "name": "search_web",
+      "description": "Search the public web"
+    }
+  ],
+  "cindy": {
+    "search": ["web"]
+  }
+}
+```
+
+- `search` 当前只接受动作 `web`，未知、空或重复动作均拒绝。
+- `cindy.search.web` 只能由真实 tool-call 触发，因此 manifest 必须同时声明
+  `tool` 槽和至少一个工具；只声明 Cindy 能力但没有工具入口会被拒绝。
+- Host 负责路由、凭证与计费，插件不声明或接触网关 Key、模型名和搜索工具定义。
+
+这是 schema v2 的新增严格能力类目。旧版 plugin-server 和 Desktop 会拒绝包含
+`cindy.search` 的包，因此必须先合并本协议、升级两个消费方并部署，再发布使用
+该能力的插件。插件 Release 应配合 `minCindyVersion`，避免旧客户端收到不兼容版本。
+
 ### Manifest 本地化资源
 
 Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包内 JSON 资源：
