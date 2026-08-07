@@ -163,9 +163,7 @@ export function makeMessageOp(payload: MessageOpPayload): HookMessageOpMessage {
 }
 
 /** msg.op.result: 操作回执; messageId 是客户端后续 edit/delete/react 的唯一依据。 */
-export function makeMessageOpResult(
-  payload: MessageOpResultPayload,
-): HookMessageOpResultMessage {
+export function makeMessageOpResult(payload: MessageOpResultPayload): HookMessageOpResultMessage {
   return envelope('msg.op.result', payload);
 }
 

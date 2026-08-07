@@ -462,7 +462,7 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
       action.tier !== 'html' &&
       action.tier !== 'plain'
     ) {
-      return "msg.op.action.tier must be one of: rich, html, plain";
+      return 'msg.op.action.tier must be one of: rich, html, plain';
     }
     return null;
   }
@@ -486,7 +486,8 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
     for (const item of action.items) {
       if (!isPlainObject(item)) return 'msg.op.action.items[] must be objects';
       const media = item as Record<string, unknown>;
-      if (!isNonEmptyString(media.name)) return 'msg.op.action.items[].name must be a non-empty string';
+      if (!isNonEmptyString(media.name))
+        return 'msg.op.action.items[].name must be a non-empty string';
       if (!isNonEmptyString(media.mimeType)) {
         return 'msg.op.action.items[].mimeType must be a non-empty string';
       }
