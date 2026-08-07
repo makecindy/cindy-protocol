@@ -274,6 +274,10 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
+/** cindy 槽·搜索类可申请的动作(web=Cindy 托管的公网搜索)。 */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
+
 /**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
@@ -291,6 +295,8 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
+  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由,插件不经手网关凭证)。 */
+  search?: GhostCindySearchAction[];
   /**
    * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
    * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
@@ -1373,7 +1379,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
-    // 类目 → 合法动作表(image / video / media / text / embed;动作集恰好
+    // 类目 → 合法动作表(image / video / media / text / embed / search;动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
       image: GHOST_MODEL_IMAGE_ACTIONS,
@@ -1381,6 +1387,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       media: GHOST_CINDY_MEDIA_ACTIONS,
       text: GHOST_CINDY_TEXT_ACTIONS,
       embed: GHOST_CINDY_EMBED_ACTIONS,
+      search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
@@ -1411,24 +1418,50 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
       else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
-      else cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
+      else
+        return {
+          ok: false,
+          reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(协议缺陷)`,
+        };
     }
-    if (cindy.image === undefined && cindy.video === undefined && cindy.media === undefined
-      && cindy.text === undefined && cindy.embed === undefined) {
+    if (
+      cindy.image === undefined &&
+      cindy.video === undefined &&
+      cindy.media === undefined &&
+      cindy.text === undefined &&
+      cindy.embed === undefined &&
+      cindy.search === undefined
+    ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
     // oneshotModel(快问快答偏好模型)是标量意图键,不是类目:先摘出,不进类目循环。
     const oneshotModelRaw = cindyRaw.oneshotModel;
     if (oneshotModelRaw !== undefined) {
-      if (typeof oneshotModelRaw !== 'string'
-        || oneshotModelRaw.trim().length === 0
-        || oneshotModelRaw.length > 128) {
-        return { ok: false, reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")' };
+      if (
+        typeof oneshotModelRaw !== 'string' ||
+        oneshotModelRaw.trim().length === 0 ||
+        oneshotModelRaw.length > 128
+      ) {
+        return {
+          ok: false,
+          reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")',
+        };
       }
       if (!cindy.text?.includes('oneshot')) {
-        return { ok: false, reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)' };
+        return {
+          ok: false,
+          reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)',
+        };
       }
       cindy.oneshotModel = oneshotModelRaw.trim();
+    }
+    if (cindy.search?.includes('web') && (!slots.includes('tool') || tools === undefined)) {
+      return {
+        ok: false,
+        reason: 'cindy.search.web 只允许由真实 tool-call 触发，必须同时声明 "tool" 槽和 tools',
+      };
     }
   }
 

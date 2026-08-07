@@ -1056,7 +1056,7 @@ describe('Ghost manifest contract', () => {
   });
 });
 
-describe('cindy 详单:media/text/embed 类目与 oneshotModel 校验(2026-08-06 协议同步)', () => {
+describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', () => {
   const base = {
     schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
     id: 'cindy-full',
@@ -1081,13 +1081,33 @@ describe('cindy 详单:media/text/embed 类目与 oneshotModel 校验(2026-08-06
     expect(validateGhostManifest({ ...base, cindy: { embed: ['oneshot'] } }).ok).toBe(false);
   });
 
+  it('接受 search.web 并要求真实工具声明', () => {
+    const manifest = {
+      ...base,
+      slots: ['cindy', 'tool'],
+      tools: [{ name: 'search_web', description: 'Search the public web' }],
+      cindy: { search: ['web'] },
+    };
+    const accepted = validateGhostManifest(manifest);
+    expect(accepted.ok, accepted.ok ? '' : String(accepted.reason)).toBe(true);
+    if (accepted.ok) expect(accepted.manifest.cindy).toEqual({ search: ['web'] });
+
+    expect(validateGhostManifest({ ...base, cindy: { search: ['web'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: ['deep'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: [] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: ['web', 'web'] } }).ok).toBe(
+      false,
+    );
+  });
+
   it('oneshotModel:合法声明落字段;形态非法 / 缺 text.oneshot 单挂 → 拒', () => {
     const ok = validateGhostManifest({
       ...base,
       cindy: { text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' },
     });
     expect(ok.ok, ok.ok ? '' : String(ok.reason)).toBe(true);
-    if (ok.ok) expect(ok.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+    if (ok.ok)
+      expect(ok.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
 
     for (const bad of [
       { text: ['oneshot'], oneshotModel: '' },
