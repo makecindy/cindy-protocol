@@ -72,6 +72,9 @@ function isWindowsReservedName(name: string): boolean {
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
+ * 'ios-simulator' = Host 托管的内嵌 iOS 模拟器入口:插件只能读取当前任务的
+ * 脱敏状态并请求 Host 打开控制面板。视频帧、输入、设备标识、Native Helper、
+ * 生命周期与恢复均不跨插件边界,仍由 Cindy Host 独占管理。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -89,6 +92,7 @@ export const GHOST_SLOTS = [
   'preview',
   'skill',
   'workspace',
+  'ios-simulator',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -1282,6 +1286,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: `slots 含重复卡槽 ${JSON.stringify(s)}` };
     }
     slots.push(name as GhostSlot);
+  }
+  // 该槽依赖新增的 Host 原生能力,旧 Cindy 不可能安全降级为“只装插件但忽略
+  // 模拟器”。强制声明最低版本,让 Plugin Server 在目录/详情/下载三条路径上
+  // 都不向旧客户端交付这份 Release。
+  if (slots.includes('ios-simulator') && raw.minCindyVersion === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "ios-simulator" 时必须同时声明 minCindyVersion',
+    };
   }
   // 声明了面板却没申请 panel 槽(或反之有槽无面板)都是清单自相矛盾。
   if (panel !== undefined && !slots.includes('panel')) {

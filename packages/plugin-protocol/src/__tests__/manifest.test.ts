@@ -647,6 +647,44 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.card).toEqual({ externalLinks: true });
   });
 
+  it('round-trips the Host-owned ios-simulator slot with an explicit Cindy version floor', () => {
+    const manifest = {
+      ...validManifest,
+      id: 'simulator-workflow',
+      name: 'Simulator Workflow',
+      minCindyVersion: '1.2.3',
+      slots: ['ios-simulator'],
+      tools: undefined,
+    } as const;
+
+    const result = validateGhostManifest(JSON.parse(JSON.stringify(manifest)));
+
+    expect(result).toEqual({ ok: true, manifest });
+  });
+
+  it('rejects ios-simulator manifests that cannot be version-gated for older Hosts', () => {
+    const manifest = {
+      ...validManifest,
+      slots: ['ios-simulator'],
+      tools: undefined,
+    };
+
+    expect(validateGhostManifest(manifest)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('minCindyVersion'),
+    });
+    expect(
+      validateGhostManifest({
+        ...manifest,
+        minCindyVersion: '1.2.3',
+        slots: ['ios-simulator-control'],
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未知卡槽'),
+    });
+  });
+
   it('enforces node slot / detail pairing and entry discipline', () => {
     const base = {
       ...validManifest,

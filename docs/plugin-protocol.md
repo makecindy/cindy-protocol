@@ -91,6 +91,33 @@ const manifest: GhostManifest = result.manifest;
 `cindy.search` 的包，因此必须先合并本协议、升级两个消费方并部署，再发布使用
 该能力的插件。插件 Release 应配合 `minCindyVersion`，避免旧客户端收到不兼容版本。
 
+### Host 托管的内嵌 iOS 模拟器
+
+插件可通过 `ios-simulator` slot 提供 Host 托管的内嵌 iOS 模拟器入口：
+
+```json
+{
+  "schemaVersion": 2,
+  "id": "simulator-workflow",
+  "name": "Simulator Workflow",
+  "version": "1.0.0",
+  "minCindyVersion": "1.2.3",
+  "entry": "main.js",
+  "slots": ["ios-simulator"]
+}
+```
+
+- 插件只能读取当前任务的脱敏状态，并请求 Host 打开模拟器控制面板。
+- 视频帧、输入事件、设备标识、Native Helper、WDA、生命周期、恢复与兼容回退
+  均由 Cindy Host 管理，不会通过本 slot 交给插件。
+- 声明 `ios-simulator` 时必须同时声明 `minCindyVersion`。Plugin Server 依照
+  `X-Cindy-Version` 选择 Release；版本未知或低于门槛的客户端不会收到该 Release。
+- 本包只登记 manifest 能力，不定义 Cindy Host 内部的 IPC、Sidecar 或媒体协议。
+
+这是 schema v2 的新增严格 slot，不提升 manifest schema 版本。旧版 plugin-server
+和 Desktop 会拒绝包含该 slot 的包，因此发布顺序必须是：先合并本协议并升级、部署
+Plugin Server 与 Cindy Host，再发布使用该能力的插件。
+
 ### Manifest 本地化资源
 
 Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包内 JSON 资源：
@@ -317,7 +344,7 @@ try {
 | `scope`               | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。                                    |
 | `organizationId`      | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                                                          |
 | `defaultInstall`      | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                                                    |
-| `minCindyVersion`     | Release 可选的最低 Cindy 版本；必须是合法 SemVer，缺失表示兼容所有 Cindy 版本。                                                           |
+| `minCindyVersion`     | Release 的最低 Cindy 版本；必须是合法 SemVer。通常可选且缺失表示兼容所有版本；`ios-simulator` 等 Host-only slot 可要求必须声明。          |
 | `X-Cindy-Version`     | 客户端请求列表、详情和下载时携带的 Cindy SemVer；共享常量为 `CINDY_CLIENT_VERSION_HEADER`，HTTP 头名称大小写不敏感。                      |
 | `currentRelease`      | 服务端为当前客户端选择的 Release；优先服务端 current，不兼容时回退到最新且仍有效的历史兼容 Release。列表只含摘要，详情额外包含 manifest。 |
 | `currentRelease.icon` | 所选兼容 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。                                             |
