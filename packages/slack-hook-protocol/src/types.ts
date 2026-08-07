@@ -217,6 +217,8 @@ export const HOOK_MESSAGE_TYPES = [
   'turn.delivery',
   'turn.progress',
   'turn.reopen',
+  'msg.op',
+  'msg.op.result',
   'bind.start',
   'bind.update',
   'bind.revoke',
@@ -1298,6 +1300,133 @@ export const HOOK_FEATURE_TURN_REOPEN = 'turn-reopen-v1';
  */
 export const HOOK_FEATURE_TURN_DELIVERY = 'turn-delivery-v1';
 
+// ── 阶段 20: 消息操作动词(msg.op) —— 内容面上收客户端 ─────────────────────────
+
+/**
+ * 双向能力标识: 双方都宣告后, desktop 用 msg.op 直接驱动渠道消息形态,
+ * server 退为**哑执行器**(只做 lane 授权、全局限速与 API 调用, 不解释内容)。
+ *
+ * 为什么要这条轴: 现有 turn.progress / turn.end 是按「turn 阶段」切的 ——
+ * 客户端产文本快照、服务端决定它长什么样(分块、发还是编辑、卡片形态、
+ * 表情、媒体组)。于是任何呈现改进都要协议 + 服务端 + 客户端三仓联发。
+ * 正确的轴是**内容面(客户端) vs 投递面(服务端)**: 消息形态由客户端全权决定,
+ * 服务端只保留多租户授权、跨租户共享 token 的限速预算、终稿必达与离线自治。
+ *
+ * 兼容: 缺席本标识时 desktop 继续走 turn.progress / turn.end 旧路径, 服务端
+ * 保留旧渲染栈, 老客户端逐字节无感知。**仅 telegram provider 先行**——
+ * Slack / X 的渲染路径不接入本动词集(它们的形态契约由 Dash 重构后的实现持有,
+ * 不在本轴的搬迁范围)。
+ */
+export const HOOK_FEATURE_MESSAGE_OPS = 'msg-op-v1';
+
+/** msg.op 的作用域: 服务端据此校验该设备是否有权操作这条 lane。 */
+export interface MessageOpScope {
+  /** 目标渠道会话(与 task.dispatch 的 externalKey 同一命名空间)。 */
+  externalKey: string;
+  /** 服务端解析出的目标聊天; 缺省 = 由 externalKey 推导。 */
+  chatId?: string;
+  /** forum topic id; '' / 缺省 = 主群流。 */
+  threadId?: string;
+}
+
+/**
+ * 一次消息操作的具体动作。
+ *
+ * 设计约束(与「哑执行器」互为定义):
+ *   - 形态参数已经是**最终形态**: 文本是渲染好的正文, 分块由客户端切好,
+ *     服务端不再分块、不再套模板、不再补文案;
+ *   - 每个动作自带 `opId`(客户端生成, 全局唯一)。服务端按 opId 幂等:
+ *     重复收到同一 opId 一律返回首次结果, 不重复调用 Bot API —— 这是断连
+ *     重发下不产生重复消息的**唯一**依据(Telegram 没有发送端幂等键)。
+ */
+export type MessageOpAction =
+  | {
+      kind: 'send';
+      /** 已渲染的最终正文(客户端已分块; 服务端不再切)。 */
+      text: string;
+      /** 回复锚点: 目标渠道的原生 message id。 */
+      replyToMessageId?: string | null;
+      /** 客户端决定的呈现档位; 服务端按能力降级但不改内容。 */
+      tier?: 'rich' | 'html' | 'plain';
+      silent?: boolean;
+      /** 该消息挂的按钮(语义与形态都由客户端定, 服务端原样下发)。 */
+      buttons?: MessageOpButton[][];
+    }
+  | {
+      kind: 'edit';
+      messageId: string;
+      text: string;
+      tier?: 'rich' | 'html' | 'plain';
+      buttons?: MessageOpButton[][];
+    }
+  | { kind: 'delete'; messageId: string }
+  | {
+      kind: 'react';
+      targetMessageId: string;
+      /** 空串 = 撤销该消息上本 bot 的表情。 */
+      emoji: string;
+      big?: boolean;
+    }
+  | { kind: 'typing' }
+  | {
+      kind: 'media';
+      items: MessageOpMediaItem[];
+      /** 2 张以上连续图片是否合成原生相册(客户端决定)。 */
+      album?: boolean;
+      replyToMessageId?: string | null;
+    };
+
+export interface MessageOpButton {
+  /** 客户端生成的回调 token; 服务端只做透传与一次性消费, 不解释语义。 */
+  token: string;
+  label: string;
+}
+
+export interface MessageOpMediaItem {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+  caption?: string;
+}
+
+/**
+ * msg.op(desktop -> server): 驱动一次渠道消息操作。
+ *
+ * 服务端职责边界(哑执行器):
+ *   1. 校验 scope.externalKey 落在该设备的绑定内(多租户授权, 不可下放客户端);
+ *   2. 排进该 bot token 的全局限速队列, 尊重完整 retry_after(跨租户共享预算,
+ *      必须中心化);
+ *   3. 调用 Bot API, 按 opId 幂等;
+ *   4. 回 msg.op.result 带上渠道 message id。
+ * 除此之外**不解释内容**: 不分块、不套文案、不判断该发还是该编辑。
+ */
+export interface MessageOpPayload {
+  /** 客户端生成的幂等键, 全局唯一; 重发同一 opId 不产生第二条消息。 */
+  opId: string;
+  /** 归属的 turn(用于日志关联与 lane 授权); 非 turn 语境可省略。 */
+  requestId?: string;
+  scope: MessageOpScope;
+  action: MessageOpAction;
+}
+
+/**
+ * msg.op.result(server -> desktop): 一次消息操作的回执。
+ *
+ * `messageId` 是客户端做后续 edit / delete / react 的**唯一**依据 —— 没有它,
+ * 整个动词集只能发不能改。失败时 `error` 说明原因; `retryAfterMs` 非空表示
+ * 服务端限速队列建议的等待(客户端据此排后续 op, 不自行加固定上限)。
+ */
+export interface MessageOpResultPayload {
+  opId: string;
+  ok: boolean;
+  /** send / media 成功时渠道返回的 message id(media 相册返回首条)。 */
+  messageId?: string | null;
+  /** 相册等一次产出多条时的完整 id 列表。 */
+  messageIds?: string[];
+  error?: string | null;
+  retryAfterMs?: number | null;
+}
+
 /**
  * 内置「对话」伪工作目录的保留别名。desktop 恒把它放进 hello / query 的
  * workspaces 清单首位(绑定到它的任务以无项目目录的对话模式运行), 真实
@@ -1444,6 +1573,8 @@ export type HookTaskAckMessage = HookEnvelope<'task.ack', TaskAckPayload>;
 export type HookTurnEndMessage = HookEnvelope<'turn.end', TurnEndPayload>;
 export type HookTurnDeliveryMessage = HookEnvelope<'turn.delivery', TurnDeliveryPayload>;
 export type HookTurnProgressMessage = HookEnvelope<'turn.progress', TurnProgressPayload>;
+export type HookMessageOpMessage = HookEnvelope<'msg.op', MessageOpPayload>;
+export type HookMessageOpResultMessage = HookEnvelope<'msg.op.result', MessageOpResultPayload>;
 export type HookTurnReopenMessage = HookEnvelope<'turn.reopen', TurnReopenPayload>;
 export type HookBindStartMessage = HookEnvelope<'bind.start', BindStartPayload>;
 export type HookBindUpdateMessage = HookEnvelope<'bind.update', BindUpdatePayload>;
@@ -1560,7 +1691,9 @@ export type HookMessage =
   | HookLifecyclePreferenceMessage
   | HookProviderBehaviorGetMessage
   | HookProviderBehaviorSetMessage
-  | HookProviderBehaviorStateMessage;
+  | HookProviderBehaviorStateMessage
+  | HookMessageOpMessage
+  | HookMessageOpResultMessage;
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };

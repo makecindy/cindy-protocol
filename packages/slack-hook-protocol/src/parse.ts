@@ -423,6 +423,113 @@ function validateTurnReopen(p: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * msg.op: 内容面上收客户端后的消息操作动词。
+ *
+ * 校验刻意只到"形状"为止 —— 服务端是哑执行器, 不解释内容, 所以正文长度、
+ * 分块、文案一律不在这里判(那些由客户端负责)。但两件事必须校严:
+ *   - `opId` 是断连重发下不产生重复消息的唯一依据(Telegram 无发送端幂等键),
+ *     缺失即拒收, 不能让服务端"尽力而为"地猜;
+ *   - `scope.externalKey` 是多租户授权的锚点, 缺失即拒收。
+ */
+function validateMessageOp(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.opId)) return 'msg.op.opId must be a non-empty string';
+  if (p.requestId !== undefined && !isNonEmptyString(p.requestId)) {
+    return 'msg.op.requestId must be a non-empty string when present';
+  }
+  if (!isPlainObject(p.scope)) return 'msg.op.scope must be an object';
+  const scope = p.scope as Record<string, unknown>;
+  if (!isNonEmptyString(scope.externalKey)) {
+    return 'msg.op.scope.externalKey must be a non-empty string';
+  }
+  if (scope.chatId !== undefined && !isNonEmptyString(scope.chatId)) {
+    return 'msg.op.scope.chatId must be a non-empty string when present';
+  }
+  if (scope.threadId !== undefined && typeof scope.threadId !== 'string') {
+    return 'msg.op.scope.threadId must be a string when present';
+  }
+  if (!isPlainObject(p.action)) return 'msg.op.action must be an object';
+  const action = p.action as Record<string, unknown>;
+  const kind = action.kind;
+  if (kind === 'send' || kind === 'edit') {
+    if (typeof action.text !== 'string') return `msg.op.action.text must be a string`;
+    if (kind === 'edit' && !isNonEmptyString(action.messageId)) {
+      return 'msg.op.action.messageId must be a non-empty string';
+    }
+    if (
+      action.tier !== undefined &&
+      action.tier !== 'rich' &&
+      action.tier !== 'html' &&
+      action.tier !== 'plain'
+    ) {
+      return "msg.op.action.tier must be one of: rich, html, plain";
+    }
+    return null;
+  }
+  if (kind === 'delete') {
+    return isNonEmptyString(action.messageId)
+      ? null
+      : 'msg.op.action.messageId must be a non-empty string';
+  }
+  if (kind === 'react') {
+    if (!isNonEmptyString(action.targetMessageId)) {
+      return 'msg.op.action.targetMessageId must be a non-empty string';
+    }
+    // 空串是**撤销**语义, 合法; 只拒非字符串。
+    return typeof action.emoji === 'string' ? null : 'msg.op.action.emoji must be a string';
+  }
+  if (kind === 'typing') return null;
+  if (kind === 'media') {
+    if (!Array.isArray(action.items) || action.items.length === 0) {
+      return 'msg.op.action.items must be a non-empty array';
+    }
+    for (const item of action.items) {
+      if (!isPlainObject(item)) return 'msg.op.action.items[] must be objects';
+      const media = item as Record<string, unknown>;
+      if (!isNonEmptyString(media.name)) return 'msg.op.action.items[].name must be a non-empty string';
+      if (!isNonEmptyString(media.mimeType)) {
+        return 'msg.op.action.items[].mimeType must be a non-empty string';
+      }
+      if (!isNonEmptyString(media.dataBase64)) {
+        return 'msg.op.action.items[].dataBase64 must be a non-empty string';
+      }
+    }
+    return null;
+  }
+  return `msg.op.action.kind is unknown: ${String(kind)}`;
+}
+
+/**
+ * msg.op.result: 操作回执。`messageId` 是客户端做后续 edit / delete / react 的
+ * 唯一依据 —— 没有它整个动词集只能发不能改, 所以 ok=true 的 send / media 必须带。
+ * 这里只能校验形状(是否为串), "该不该带"由动作类型决定, 交给消费方。
+ */
+function validateMessageOpResult(p: Record<string, unknown>): string | null {
+  if (!isNonEmptyString(p.opId)) return 'msg.op.result.opId must be a non-empty string';
+  if (typeof p.ok !== 'boolean') return 'msg.op.result.ok must be a boolean';
+  // messageId / error 都是**可选**字段: typing、delete 的回执没有 message id,
+  // 成功回执也没有 error。缺席与显式 null 同义, 都不算格式错误。
+  if (p.messageId !== undefined && !isNullableString(p.messageId)) {
+    return 'msg.op.result.messageId must be a string or null';
+  }
+  if (p.messageIds !== undefined) {
+    if (!Array.isArray(p.messageIds) || p.messageIds.some((v) => !isNonEmptyString(v))) {
+      return 'msg.op.result.messageIds must be an array of non-empty strings';
+    }
+  }
+  if (p.error !== undefined && !isNullableString(p.error)) {
+    return 'msg.op.result.error must be a string or null';
+  }
+  if (
+    p.retryAfterMs !== undefined &&
+    p.retryAfterMs !== null &&
+    (typeof p.retryAfterMs !== 'number' || !Number.isFinite(p.retryAfterMs) || p.retryAfterMs < 0)
+  ) {
+    return 'msg.op.result.retryAfterMs must be a non-negative finite number or null';
+  }
+  return null;
+}
+
 // ── v2 增量帧校验 ────────────────────────────────────────────────────────────
 
 /**
@@ -1236,6 +1343,8 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'turn.delivery': validateTurnDelivery,
   'turn.progress': validateTurnProgress,
   'turn.reopen': validateTurnReopen,
+  'msg.op': validateMessageOp,
+  'msg.op.result': validateMessageOpResult,
   'bind.start': validateBindStart,
   'bind.update': validateBindUpdate,
   'bind.revoke': validateBindRevoke,

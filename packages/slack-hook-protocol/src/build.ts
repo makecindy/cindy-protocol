@@ -89,6 +89,10 @@ import {
   type TurnEndPayload,
   type TurnDeliveryPayload,
   type TurnProgressPayload,
+  type MessageOpPayload,
+  type MessageOpResultPayload,
+  type HookMessageOpMessage,
+  type HookMessageOpResultMessage,
   type TurnReopenPayload,
   type WelcomePayload,
 } from './types';
@@ -151,6 +155,18 @@ export function makeTurnDelivery(payload: TurnDeliveryPayload): HookTurnDelivery
 
 export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgressMessage {
   return envelope('turn.progress', payload);
+}
+
+/** msg.op: 内容面上收客户端后的消息操作动词(见 types.ts 阶段 20)。 */
+export function makeMessageOp(payload: MessageOpPayload): HookMessageOpMessage {
+  return envelope('msg.op', payload);
+}
+
+/** msg.op.result: 操作回执; messageId 是客户端后续 edit/delete/react 的唯一依据。 */
+export function makeMessageOpResult(
+  payload: MessageOpResultPayload,
+): HookMessageOpResultMessage {
+  return envelope('msg.op.result', payload);
 }
 
 /**
