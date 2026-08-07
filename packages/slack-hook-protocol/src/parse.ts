@@ -442,11 +442,12 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(scope.externalKey)) {
     return 'msg.op.scope.externalKey must be a non-empty string';
   }
-  if (scope.chatId !== undefined && !isNonEmptyString(scope.chatId)) {
-    return 'msg.op.scope.chatId must be a non-empty string when present';
-  }
-  if (scope.threadId !== undefined && typeof scope.threadId !== 'string') {
-    return 'msg.op.scope.threadId must be a string when present';
+  // 寻址字段一律拒收: externalKey 是唯一授权锚点, 目标 chat 必须由服务端从
+  // 自己那份 lane 记录里取。放行一个客户端指定的 chat_id, 一台被攻陷或有 bug
+  // 的桌面就能越过自己 lane 的边界往任意聊天发消息 —— 静默忽略不够, 因为那会
+  // 让发送方以为寻址生效了。
+  if (scope.chatId !== undefined || scope.threadId !== undefined) {
+    return 'msg.op.scope must not carry chatId/threadId: the server resolves the target from externalKey';
   }
   if (!isPlainObject(p.action)) return 'msg.op.action must be an object';
   const action = p.action as Record<string, unknown>;

@@ -1321,12 +1321,15 @@ export const HOOK_FEATURE_MESSAGE_OPS = 'msg-op-v1';
 
 /** msg.op 的作用域: 服务端据此校验该设备是否有权操作这条 lane。 */
 export interface MessageOpScope {
-  /** 目标渠道会话(与 task.dispatch 的 externalKey 同一命名空间)。 */
+  /**
+   * 目标渠道会话(与 task.dispatch 的 externalKey 同一命名空间)。
+   *
+   * **这是本动词集唯一的授权锚点, 也是唯一的寻址依据。** 服务端必须由它反查
+   * 自己那份 lane 记录, 从记录里取实际的 chat / topic —— 不接受客户端直接指定
+   * 目标聊天。否则一台被攻陷或有 bug 的桌面就能往任意 chat_id 发消息, 越过它
+   * 自己 lane 的边界。lane 不存在或不属于该设备的绑定 principal 时一律拒绝执行。
+   */
   externalKey: string;
-  /** 服务端解析出的目标聊天; 缺省 = 由 externalKey 推导。 */
-  chatId?: string;
-  /** forum topic id; '' / 缺省 = 主群流。 */
-  threadId?: string;
 }
 
 /**

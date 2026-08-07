@@ -67,6 +67,21 @@ describe('msg.op 动词集', () => {
     expect((parsed.payload as { action: { emoji: string } }).action.emoji).toBe('');
   });
 
+  it('scope 携带 chatId / threadId 一律拒收(寻址权不在客户端)', () => {
+    // 目标 chat 必须由服务端从 lane 记录里取。允许客户端指定, 一台被攻陷或有
+    // bug 的桌面就能越过自己 lane 的边界往任意聊天发消息。
+    for (const extra of [{ chatId: '-100999' }, { threadId: '7' }]) {
+      const frame = JSON.parse(serializeHookMessage(op({ kind: 'typing' }))) as Record<
+        string,
+        unknown
+      >;
+      Object.assign((frame.payload as { scope: Record<string, unknown> }).scope, extra);
+      const parsed = parseHookMessage(JSON.stringify(frame));
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toContain('resolves the target from externalKey');
+    }
+  });
+
   it('缺 opId 或 scope.externalKey 一律拒收', () => {
     // opId 是断连重发下不产生重复消息的唯一依据(Telegram 无发送端幂等键),
     // externalKey 是多租户授权锚点 —— 两者都不能让服务端"尽力而为"地猜。
