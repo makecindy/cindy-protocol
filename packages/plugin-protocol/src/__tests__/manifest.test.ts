@@ -31,9 +31,7 @@ describe('Ghost manifest contract', () => {
 
   it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
     expect(validateGhostManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
-    expect(
-      validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' }),
-    ).toEqual({
+    expect(validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' })).toEqual({
       ok: true,
       manifest: { ...validManifest, minCindyVersion: '1.2.3' },
     });
@@ -46,9 +44,7 @@ describe('Ghost manifest contract', () => {
     expect(compareCindyVersions('1.2.3', '1.2.3')).toBe(0);
     expect(compareCindyVersions('1.3.0', '1.2.9')).toBe(1);
     expect(compareCindyVersions('1.2.3-beta.2', '1.2.3-beta.10')).toBe(-1);
-    expect(
-      compareCindyVersions('1.2.3-999999999999999999', '1.2.3-1000000000000000000'),
-    ).toBe(-1);
+    expect(compareCindyVersions('1.2.3-999999999999999999', '1.2.3-1000000000000000000')).toBe(-1);
     expect(compareCindyVersions('1.2.3', '1.2.3-rc.1')).toBe(1);
     expect(compareCindyVersions('not-a-version', '1.2.3')).toBeNull();
     expect(isValidCindyVersion('1.2.3')).toBe(true);

@@ -995,8 +995,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (
     raw.minCindyVersion !== undefined &&
-    (typeof raw.minCindyVersion !== 'string' ||
-      !isValidCindyVersion(raw.minCindyVersion))
+    (typeof raw.minCindyVersion !== 'string' || !isValidCindyVersion(raw.minCindyVersion))
   ) {
     return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
   }
