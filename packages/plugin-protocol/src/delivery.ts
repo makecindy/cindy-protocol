@@ -8,13 +8,16 @@ import {
 /** Plugin 客户端 HTTP list/detail envelope 版本；与 ghost.json 版本独立演进。 */
 export const PLUGIN_API_SCHEMA_VERSION = 2 as const;
 
+/** 客户端请求 Plugin Server 时携带的 Cindy 版本请求头。 */
+export const CINDY_CLIENT_VERSION_HEADER = 'x-cindy-version' as const;
+
 /** 普通客户端可见的 Plugin 来源范围。 */
 export const PLUGIN_SCOPES = ['public', 'organization', 'personal'] as const;
 
 /** `public` 对所有已登录身份可见；其余范围只对对应组织或自然人可见。 */
 export type PluginScope = (typeof PLUGIN_SCOPES)[number];
 
-/** 当前 Release 的可直接展示图标元数据；URL 为短期授权地址。 */
+/** 服务端为当前客户端选择的 Release 图标元数据；URL 为短期授权地址。 */
 export interface PluginIconMetadata {
   /** 图标 MIME 类型，例如 image/png 或 image/svg+xml。 */
   mimeType: string;
@@ -28,7 +31,7 @@ export interface PluginIconMetadata {
   expiresAt: string;
 }
 
-/** 列表和详情共用的当前 Release 摘要。 */
+/** 列表和详情共用的客户端兼容 Release 摘要。 */
 export interface PluginReleaseSummary {
   /** plugin-server 生成的 Release 资源 ID；调用方应将其视为不透明字符串。 */
   id: string;
@@ -44,7 +47,7 @@ export interface PluginReleaseSummary {
   icon: PluginIconMetadata | null;
 }
 
-/** 详情响应中的当前 Release；在摘要基础上包含已校验的完整 manifest。 */
+/** 详情响应中的客户端兼容 Release；在摘要基础上包含已校验的完整 manifest。 */
 export interface PluginReleaseDetail extends PluginReleaseSummary {
   /** 已通过 `validateGhostManifest` 规范化的当前 manifest。 */
   manifest: GhostManifest;
@@ -56,11 +59,11 @@ export interface VisiblePluginSummary {
   id: string;
   /** 包内 `ghost.json.id`；跨不同来源允许重名，不能代替 `id`。 */
   ghostId: string;
-  /** 当前 Release manifest 的展示名。 */
+  /** 客户端兼容 Release manifest 的展示名。 */
   name: string;
-  /** 当前 Release manifest 的描述；未声明时为 `null`。 */
+  /** 客户端兼容 Release manifest 的描述；未声明时为 `null`。 */
   description: string | null;
-  /** 当前 Release manifest 的作者；未声明时为 `null`。 */
+  /** 客户端兼容 Release manifest 的作者；未声明时为 `null`。 */
   author: string | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
@@ -68,7 +71,7 @@ export interface VisiblePluginSummary {
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
-  /** 服务端当前发布的唯一 Release。 */
+  /** 服务端为该客户端选择的 Release；优先 current，不兼容时回退到历史兼容版本。 */
   currentRelease: PluginReleaseSummary;
 }
 
@@ -78,11 +81,11 @@ export interface VisiblePluginDetail {
   id: string;
   /** 包内 `ghost.json.id`；跨不同来源允许重名，不能代替 `id`。 */
   ghostId: string;
-  /** 当前 Release manifest 的展示名。 */
+  /** 客户端兼容 Release manifest 的展示名。 */
   name: string;
-  /** 当前 Release manifest 的描述；未声明时为 `null`。 */
+  /** 客户端兼容 Release manifest 的描述；未声明时为 `null`。 */
   description: string | null;
-  /** 当前 Release manifest 的作者；未声明时为 `null`。 */
+  /** 客户端兼容 Release manifest 的作者；未声明时为 `null`。 */
   author: string | null;
   /** Plugin 的来源范围。 */
   scope: PluginScope;
@@ -90,7 +93,7 @@ export interface VisiblePluginDetail {
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
-  /** 服务端当前发布的唯一 Release，包含完整 manifest。 */
+  /** 服务端为该客户端选择的 Release，包含完整 manifest。 */
   currentRelease: PluginReleaseDetail;
 }
 

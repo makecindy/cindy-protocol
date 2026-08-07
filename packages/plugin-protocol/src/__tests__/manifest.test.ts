@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_OAUTH_SCOPES_MAX,
+  compareCindyVersions,
   ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
+  isValidCindyVersion,
   isValidGhostId,
+  isVersionlessCindyVersion,
+  supportsCindyVersion,
   validateGhostManifest,
 } from '../manifest.js';
 
@@ -23,6 +27,36 @@ describe('Ghost manifest contract', () => {
   it('accepts and normalizes a valid schema v2 manifest', () => {
     const result = validateGhostManifest(validManifest);
     expect(result).toEqual({ ok: true, manifest: validManifest });
+  });
+
+  it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
+    expect(validateGhostManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
+    expect(validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' })).toEqual({
+      ok: true,
+      manifest: { ...validManifest, minCindyVersion: '1.2.3' },
+    });
+    for (const invalid of ['v1.2.3', '1.2', '01.2.3', '1.2.3-01', '']) {
+      expect(validateGhostManifest({ ...validManifest, minCindyVersion: invalid }).ok).toBe(false);
+    }
+  });
+
+  it('compares Cindy versions with SemVer precedence', () => {
+    expect(compareCindyVersions('1.2.3', '1.2.3')).toBe(0);
+    expect(compareCindyVersions('1.3.0', '1.2.9')).toBe(1);
+    expect(compareCindyVersions('1.2.3-beta.2', '1.2.3-beta.10')).toBe(-1);
+    expect(compareCindyVersions('1.2.3-999999999999999999', '1.2.3-1000000000000000000')).toBe(-1);
+    expect(compareCindyVersions('1.2.3', '1.2.3-rc.1')).toBe(1);
+    expect(compareCindyVersions('not-a-version', '1.2.3')).toBeNull();
+    expect(isValidCindyVersion('1.2.3')).toBe(true);
+    expect(isValidCindyVersion('v1.2.3')).toBe(false);
+    expect(isVersionlessCindyVersion('0.0.0-dev.1')).toBe(true);
+    expect(supportsCindyVersion('0.1.0', undefined)).toBe(true);
+    expect(supportsCindyVersion('0.0.0-dev.1', '99.0.0')).toBe(true);
+    expect(supportsCindyVersion('0.0.0-not valid', '1.0.0')).toBe(false);
+    expect(supportsCindyVersion('0.0.0-dev.1', 'not-a-version')).toBe(false);
+    expect(supportsCindyVersion('1.2.3', '1.2.3')).toBe(true);
+    expect(supportsCindyVersion('1.2.2', '1.2.3')).toBe(false);
+    expect(supportsCindyVersion('not-a-version', '1.2.3')).toBe(false);
   });
 
   it('rejects invalid ids and schema versions', () => {
