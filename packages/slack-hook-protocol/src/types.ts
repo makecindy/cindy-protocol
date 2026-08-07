@@ -1341,6 +1341,14 @@ export interface MessageOpScope {
  *   - 每个动作自带 `opId`(客户端生成, 全局唯一)。服务端按 opId 幂等:
  *     重复收到同一 opId 一律返回首次结果, 不重复调用 Bot API —— 这是断连
  *     重发下不产生重复消息的**唯一**依据(Telegram 没有发送端幂等键)。
+ *
+ * 服务端不变量(两条, 缺一即安全漏洞):
+ *   1. **寻址**: 目标 chat / topic 只能由 `scope.externalKey` 反查服务端自己
+ *      的 lane 记录得到, 不读客户端任何输入(见 MessageOpScope)。
+ *   2. **归属**: `edit` / `delete` / `react` 引用的 messageId 必须经服务端核验
+ *      确属该 lane —— 它只能是本 lane 先前 `send` 的产物, 或该 lane 收到的
+ *      入站消息。少了这一条, 这套动词就是一个能编辑、删除、标记**任意**消息的
+ *      后门: messageId 在 Telegram 里只是个自增序号, 猜得到。
  */
 export type MessageOpAction =
   | {
