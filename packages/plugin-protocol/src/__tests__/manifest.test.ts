@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
   GHOST_OAUTH_SCOPES_MAX,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
@@ -131,6 +132,187 @@ describe('Ghost manifest contract', () => {
     expect(result.ok && ghostManifestUsesOidcToken(result.manifest)).toBe(true);
     const baseline = validateGhostManifest(validManifest);
     expect(baseline.ok && ghostManifestUsesOidcToken(baseline.manifest)).toBe(false);
+  });
+
+  it('accepts and normalizes secret endpoint path/method allowlists (schema v3)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              paths: ['/v1/z', '/v1/convert'],
+              methods: ['POST', 'GET'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.schemaVersion).toBe(GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE);
+    expect(result.manifest.network?.secrets?.[0]?.inject).toEqual({
+      header: 'Authorization',
+      format: 'Bearer {value}',
+      paths: ['/v1/convert', '/v1/z'],
+      methods: ['GET', 'POST'],
+    });
+  });
+
+  it('rejects endpoint-scoped inject on schema v2 (mixed-version fail-closed)', () => {
+    // 旧客户端不识别 paths/methods,会静默退化为整域注入(fail-open)。因此声明
+    // 新字段的清单必须升级到 v3——v2 上声明直接拒装,老客户端遇到 v3 也整包拒装。
+    for (const extra of [
+      { paths: ['/v1/convert'] },
+      { methods: ['POST'] },
+      { paths: ['/v1/convert'], methods: ['POST'] },
+    ]) {
+      const result = validateGhostManifest({
+        ...validManifest,
+        tools: undefined,
+        slots: ['network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'api_key',
+              label: 'API Key',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                ...extra,
+              },
+            },
+          ],
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('schemaVersion');
+    }
+  });
+
+  it('accepts host-only inject on schema v3 (backward compatible)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.example.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual(['api.example.com']);
+  });
+
+  it('keeps legacy host-only inject.hosts order unchanged (manifestDigest compatibility)', () => {
+    // 旧清单的归一化输出必须与升级前逐字节一致:manifestDigest 按数组原始顺序
+    // 计算,排序会让已装插件的账本摘要永久失配。
+    const result = validateGhostManifest({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['cdn.example.com', 'api.example.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'cdn.example.com',
+      'api.example.com',
+    ]);
+  });
+
+  it('sorts inject.hosts once endpoint fields are declared (stable permission detail/diff)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com', 'cdn.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['cdn.example.com', 'api.example.com'],
+              paths: ['/v1/convert'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual([
+      'api.example.com',
+      'cdn.example.com',
+    ]);
+  });
+
+  it('rejects ambiguous endpoint paths and unsupported methods', () => {
+    const validateInject = (inject: Record<string, unknown>) =>
+      validateGhostManifest({
+        ...validManifest,
+        schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+        tools: undefined,
+        slots: ['network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [{ key: 'api_key', label: 'API Key', inject }],
+        },
+      });
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/a/../b'] }).ok,
+    ).toBe(false);
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', paths: ['/%2fsecret'] })
+        .ok,
+    ).toBe(false);
+    expect(
+      validateInject({ header: 'Authorization', format: 'Bearer {value}', methods: ['HEAD'] }).ok,
+    ).toBe(false);
   });
 
   it('rejects unsafe oidc-token declarations', () => {
