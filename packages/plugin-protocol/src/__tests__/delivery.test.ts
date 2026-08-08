@@ -6,7 +6,10 @@ import {
   parsePluginDownloadResponse,
   PluginProtocolError,
 } from '../delivery.js';
-import { GHOST_MANIFEST_SCHEMA_VERSION } from '../manifest.js';
+import {
+  GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+} from '../manifest.js';
 
 const validManifest = {
   schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
@@ -210,6 +213,7 @@ describe('plugin delivery contract', () => {
     // 市场安装路径就会退回"整域可注入",属于凭证边界的 fail open。
     const scopedManifest = {
       ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
       tools: undefined,
       slots: ['network'],
       settingsHtml: 'settings.html',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
   GHOST_OAUTH_SCOPES_MAX,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
@@ -133,9 +134,10 @@ describe('Ghost manifest contract', () => {
     expect(baseline.ok && ghostManifestUsesOidcToken(baseline.manifest)).toBe(false);
   });
 
-  it('accepts and normalizes secret endpoint path/method allowlists', () => {
+  it('accepts and normalizes secret endpoint path/method allowlists (schema v3)', () => {
     const result = validateGhostManifest({
       ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
       tools: undefined,
       slots: ['network'],
       settingsHtml: 'settings.html',
@@ -157,12 +159,73 @@ describe('Ghost manifest contract', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.manifest.schemaVersion).toBe(GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE);
     expect(result.manifest.network?.secrets?.[0]?.inject).toEqual({
       header: 'Authorization',
       format: 'Bearer {value}',
       paths: ['/v1/convert', '/v1/z'],
       methods: ['GET', 'POST'],
     });
+  });
+
+  it('rejects endpoint-scoped inject on schema v2 (mixed-version fail-closed)', () => {
+    // 旧客户端不识别 paths/methods,会静默退化为整域注入(fail-open)。因此声明
+    // 新字段的清单必须升级到 v3——v2 上声明直接拒装,老客户端遇到 v3 也整包拒装。
+    for (const extra of [
+      { paths: ['/v1/convert'] },
+      { methods: ['POST'] },
+      { paths: ['/v1/convert'], methods: ['POST'] },
+    ]) {
+      const result = validateGhostManifest({
+        ...validManifest,
+        tools: undefined,
+        slots: ['network'],
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'api_key',
+              label: 'API Key',
+              inject: {
+                header: 'Authorization',
+                format: 'Bearer {value}',
+                ...extra,
+              },
+            },
+          ],
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('schemaVersion');
+    }
+  });
+
+  it('accepts host-only inject on schema v3 (backward compatible)', () => {
+    const result = validateGhostManifest({
+      ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['api.example.com'],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.network?.secrets?.[0]?.inject.hosts).toEqual(['api.example.com']);
   });
 
   it('keeps legacy host-only inject.hosts order unchanged (manifestDigest compatibility)', () => {
@@ -199,6 +262,7 @@ describe('Ghost manifest contract', () => {
   it('sorts inject.hosts once endpoint fields are declared (stable permission detail/diff)', () => {
     const result = validateGhostManifest({
       ...validManifest,
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
       tools: undefined,
       slots: ['network'],
       settingsHtml: 'settings.html',
@@ -230,6 +294,7 @@ describe('Ghost manifest contract', () => {
     const validateInject = (inject: Record<string, unknown>) =>
       validateGhostManifest({
         ...validManifest,
+        schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE,
         tools: undefined,
         slots: ['network'],
         settingsHtml: 'settings.html',

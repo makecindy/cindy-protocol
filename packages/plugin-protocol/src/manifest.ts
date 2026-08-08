@@ -7,6 +7,18 @@ export const CINDY_FILE_EXT = '.cindy';
 /** ghost.json 格式版本；与 Plugin HTTP API envelope 版本独立演进。 */
 export const GHOST_MANIFEST_SCHEMA_VERSION = 2 as const;
 
+/**
+ * 声明 endpoint-scoped secret 注入(inject.paths / inject.methods)所需的 schema 版本。
+ * 旧客户端只认 GHOST_MANIFEST_SCHEMA_VERSION,对更高的版本整包拒装——这是
+ * mixed-version fail-closed 边界:使用新安全字段的插件必须声明该版本,在旧客户端
+ * 上被拒绝,而不是被静默降级为整域注入(权限收窄退化为放开)。
+ */
+export const GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE = 3 as const;
+
+/** ghost.json 当前受理的全部 schema 版本。 */
+export type GhostManifestSchemaVersion =
+  typeof GHOST_MANIFEST_SCHEMA_VERSION | typeof GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE;
+
 /** ghost.json 的 description / whenToUse 字符上限。 */
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
 
@@ -786,8 +798,8 @@ export interface GhostSkillNeeds {
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
-  /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
-  schemaVersion: typeof GHOST_MANIFEST_SCHEMA_VERSION;
+  /** 清单格式版本:2 = 基线(v1 声明型已于 2026-07-12 移除);3 = endpoint-scoped 凭证注入。 */
+  schemaVersion: GhostManifestSchemaVersion;
   /** 唯一标识,同时是安装目录名与 panelKind 后缀。 */
   id: string;
   /** 展示名。 */
@@ -1052,10 +1064,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 export function validateGhostManifest(raw: unknown): ManifestValidation {
   if (!isPlainObject(raw)) return { ok: false, reason: '清单不是对象' };
 
-  if (raw.schemaVersion !== GHOST_MANIFEST_SCHEMA_VERSION) {
+  if (
+    raw.schemaVersion !== GHOST_MANIFEST_SCHEMA_VERSION &&
+    raw.schemaVersion !== GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE
+  ) {
     return {
       ok: false,
-      reason: `schemaVersion 必须是 ${GHOST_MANIFEST_SCHEMA_VERSION},得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)`,
+      reason: `schemaVersion 必须是 ${GHOST_MANIFEST_SCHEMA_VERSION} 或 ${GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE},得到 ${JSON.stringify(raw.schemaVersion)}(v1 声明型已于 2026-07-12 移除)`,
     };
   }
   if (!isValidGhostId(raw.id)) {
@@ -1796,6 +1811,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             injectHosts.push(ihNorm);
           }
         }
+        // endpoint-scoped 注入(paths / methods)必须声明 schemaVersion 3:
+        // 旧客户端不识别这两个字段,若放行会让收窄静默退化为整域注入(fail-open)。
+        // 声明新字段即升级版本,旧客户端对 v3 整包拒装——mixed-version fail-closed。
+        if (
+          (inj.paths !== undefined || inj.methods !== undefined) &&
+          raw.schemaVersion !== GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE
+        ) {
+          return {
+            ok: false,
+            reason: `network.secrets[].inject 声明了 paths/methods,必须使用 schemaVersion ${GHOST_MANIFEST_SCHEMA_VERSION_ENDPOINT_SCOPE}(旧版本客户端会忽略这些字段并退化为整域注入,故强制升级清单版本)`,
+          };
+        }
         let injectPaths: string[] | undefined;
         if (inj.paths !== undefined) {
           if (
@@ -1861,7 +1888,10 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         // 排序归一化只对声明了新字段(inject.paths / inject.methods)的凭证生效:
         // 旧 host-only 清单的归一化输出必须与升级前逐字节一致(manifestDigest 按
         // 数组原始顺序计算,排序会让已装插件的账本摘要永久失配)。
-        if (injectHosts !== undefined && (injectPaths !== undefined || injectMethods !== undefined)) {
+        if (
+          injectHosts !== undefined &&
+          (injectPaths !== undefined || injectMethods !== undefined)
+        ) {
           injectHosts.sort();
         }
         if (oidcManaged) {
@@ -2954,7 +2984,8 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   return {
     ok: true,
     manifest: {
-      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+      // 保留输入版本(v3 清单不得被降级回 v2,否则 manifestDigest 与打包时失配)。
+      schemaVersion: raw.schemaVersion as GhostManifestSchemaVersion,
       id: raw.id,
       name: raw.name,
       version: raw.version,
