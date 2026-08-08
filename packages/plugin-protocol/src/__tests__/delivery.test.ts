@@ -171,6 +171,41 @@ describe('plugin delivery contract', () => {
     expect(response.plugin.currentRelease.manifest.id).toBe(validManifest.id);
   });
 
+  it('preserves the version-gated ios-simulator slot in Plugin details', () => {
+    const manifest = {
+      ...validManifest,
+      id: 'simulator-workflow',
+      name: 'Simulator Workflow',
+      minCindyVersion: '1.2.3',
+      slots: ['ios-simulator'],
+      tools: undefined,
+    } as const;
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: manifest.id,
+        name: manifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-simulator',
+          version: manifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest,
+        },
+      },
+    });
+
+    expect(response.plugin.currentRelease.manifest.slots).toEqual(['ios-simulator']);
+    expect(response.plugin.currentRelease.manifest.minCindyVersion).toBe('1.2.3');
+  });
+
   it('allows oidc-token only in organization Plugin details', () => {
     const plugin = {
       id: pluginId,
