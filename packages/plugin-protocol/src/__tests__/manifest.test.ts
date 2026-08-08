@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_OAUTH_SCOPES_MAX,
+  compareCindyVersions,
   ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
+  isValidCindyVersion,
   isValidGhostId,
+  isVersionlessCindyVersion,
+  supportsCindyVersion,
   validateGhostManifest,
 } from '../manifest.js';
 
@@ -25,9 +30,60 @@ describe('Ghost manifest contract', () => {
     expect(result).toEqual({ ok: true, manifest: validManifest });
   });
 
+  it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
+    expect(validateGhostManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
+    expect(validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' })).toEqual({
+      ok: true,
+      manifest: { ...validManifest, minCindyVersion: '1.2.3' },
+    });
+    for (const invalid of ['v1.2.3', '1.2', '01.2.3', '1.2.3-01', '']) {
+      expect(validateGhostManifest({ ...validManifest, minCindyVersion: invalid }).ok).toBe(false);
+    }
+  });
+
+  it('compares Cindy versions with SemVer precedence', () => {
+    expect(compareCindyVersions('1.2.3', '1.2.3')).toBe(0);
+    expect(compareCindyVersions('1.3.0', '1.2.9')).toBe(1);
+    expect(compareCindyVersions('1.2.3-beta.2', '1.2.3-beta.10')).toBe(-1);
+    expect(compareCindyVersions('1.2.3-999999999999999999', '1.2.3-1000000000000000000')).toBe(-1);
+    expect(compareCindyVersions('1.2.3', '1.2.3-rc.1')).toBe(1);
+    expect(compareCindyVersions('not-a-version', '1.2.3')).toBeNull();
+    expect(isValidCindyVersion('1.2.3')).toBe(true);
+    expect(isValidCindyVersion('v1.2.3')).toBe(false);
+    expect(isVersionlessCindyVersion('0.0.0-dev.1')).toBe(true);
+    expect(supportsCindyVersion('0.1.0', undefined)).toBe(true);
+    expect(supportsCindyVersion('0.0.0-dev.1', '99.0.0')).toBe(true);
+    expect(supportsCindyVersion('0.0.0-not valid', '1.0.0')).toBe(false);
+    expect(supportsCindyVersion('0.0.0-dev.1', 'not-a-version')).toBe(false);
+    expect(supportsCindyVersion('1.2.3', '1.2.3')).toBe(true);
+    expect(supportsCindyVersion('1.2.2', '1.2.3')).toBe(false);
+    expect(supportsCindyVersion('not-a-version', '1.2.3')).toBe(false);
+  });
+
   it('rejects invalid ids and schema versions', () => {
     expect(isValidGhostId('../escape')).toBe(false);
     expect(validateGhostManifest({ ...validManifest, schemaVersion: 1 }).ok).toBe(false);
+  });
+
+  it('shares the 300-character limit across description and whenToUse', () => {
+    expect(GHOST_MANIFEST_SUMMARY_MAX_CHARS).toBe(300);
+    for (const field of ['description', 'whenToUse'] as const) {
+      expect(
+        validateGhostManifest({
+          ...validManifest,
+          [field]: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS),
+        }).ok,
+      ).toBe(true);
+      expect(
+        validateGhostManifest({
+          ...validManifest,
+          [field]: 'x'.repeat(GHOST_MANIFEST_SUMMARY_MAX_CHARS + 1),
+        }),
+      ).toEqual({
+        ok: false,
+        reason: `${field} 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+      });
+    }
   });
 
   it('accepts an oidc-token secret without a settings page and normalizes its exact host', () => {
@@ -1136,5 +1192,72 @@ describe('Ghost manifest contract', () => {
     expect(pending.ok).toBe(false);
     if (!pending.ok) expect(pending.reason).toContain('暂未支持');
     expect(validateGhostManifest(withPanel({ position: 'center' })).ok).toBe(false);
+  });
+});
+
+describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', () => {
+  const base = {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    id: 'cindy-full',
+    name: 'Cindy Full',
+    version: '1.0.0',
+    entry: 'main.js',
+    slots: ['cindy'],
+  };
+
+  it('接受 media/text/embed 类目并保留', () => {
+    const r = validateGhostManifest({
+      ...base,
+      cindy: { media: ['deposit'], text: ['oneshot'], embed: ['text'] },
+    });
+    expect(r.ok, r.ok ? '' : String(r.reason)).toBe(true);
+    if (!r.ok) return;
+    expect(r.manifest.cindy).toEqual({ media: ['deposit'], text: ['oneshot'], embed: ['text'] });
+  });
+
+  it('text 与 embed 的动作集各归各(不接受串用)', () => {
+    expect(validateGhostManifest({ ...base, cindy: { text: ['text'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...base, cindy: { embed: ['oneshot'] } }).ok).toBe(false);
+  });
+
+  it('接受 search.web 并要求真实工具声明', () => {
+    const manifest = {
+      ...base,
+      slots: ['cindy', 'tool'],
+      tools: [{ name: 'search_web', description: 'Search the public web' }],
+      cindy: { search: ['web'] },
+    };
+    const accepted = validateGhostManifest(manifest);
+    expect(accepted.ok, accepted.ok ? '' : String(accepted.reason)).toBe(true);
+    if (accepted.ok) expect(accepted.manifest.cindy).toEqual({ search: ['web'] });
+
+    expect(validateGhostManifest({ ...base, cindy: { search: ['web'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: ['deep'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: [] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: ['web', 'web'] } }).ok).toBe(
+      false,
+    );
+  });
+
+  it('oneshotModel:合法声明落字段;形态非法 / 缺 text.oneshot 单挂 → 拒', () => {
+    const ok = validateGhostManifest({
+      ...base,
+      cindy: { text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' },
+    });
+    expect(ok.ok, ok.ok ? '' : String(ok.reason)).toBe(true);
+    if (ok.ok)
+      expect(ok.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+
+    for (const bad of [
+      { text: ['oneshot'], oneshotModel: '' },
+      { text: ['oneshot'], oneshotModel: '   ' },
+      { text: ['oneshot'], oneshotModel: 42 },
+      { text: ['oneshot'], oneshotModel: 'x'.repeat(129) },
+      { oneshotModel: 'codex/gpt-5.5' },
+      { image: ['generate'], oneshotModel: 'gpt-5.5' },
+    ]) {
+      const rejected = validateGhostManifest({ ...base, cindy: bad });
+      expect(rejected.ok, JSON.stringify(bad)).toBe(false);
+    }
   });
 });

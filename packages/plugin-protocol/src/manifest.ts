@@ -7,6 +7,9 @@ export const CINDY_FILE_EXT = '.cindy';
 /** ghost.json 格式版本；与 Plugin HTTP API envelope 版本独立演进。 */
 export const GHOST_MANIFEST_SCHEMA_VERSION = 2 as const;
 
+/** ghost.json 的 description / whenToUse 字符上限。 */
+export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
+
 /** Cindy host locales supported by Plugin manifest resources. */
 export const GHOST_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
 export type GhostLocale = (typeof GHOST_LOCALES)[number];
@@ -248,6 +251,36 @@ export type GhostModelImageAction = (typeof GHOST_MODEL_IMAGE_ACTIONS)[number];
 export const GHOST_MODEL_VIDEO_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelVideoAction = (typeof GHOST_MODEL_VIDEO_ACTIONS)[number];
 
+/** cindy 槽·媒体类可申请的动作(deposit=寄存自己手里的媒体字节入总仓)。 */
+export const GHOST_CINDY_MEDIA_ACTIONS = ['deposit'] as const;
+export type GhostCindyMediaAction = (typeof GHOST_CINDY_MEDIA_ACTIONS)[number];
+
+/**
+ * cindy 槽·文本类可申请的动作(2026-07-31 开闸)。
+ *
+ * `oneshot` = 快问快答:意识递一段文字,主机经**轻量任务模型链**(与会话
+ * 起标题、任务一句话总结同一条通道)直答一次并把文字原样递回。不拉起
+ * agent、无工具、无用户权限、不进任何会话——只花模型额度,拿不到任何
+ * 宿主能力。
+ */
+export const GHOST_CINDY_TEXT_ACTIONS = ['oneshot'] as const;
+export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
+
+/**
+ * cindy 槽·向量类可申请的动作(2026-08-04 开闸)。
+ *
+ * `text` = 文本转向量:意识递一批文字,主机经统一 embedding 通道返回等长的
+ * 向量数组。只生成、不存储;向量原样递回意识自己保管。与 text.oneshot
+ * 分成两档:两者花不同的钱(轻量任务模型链 vs embedding 模型),合成一档
+ * 就没法只授权其中一样。
+ */
+export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
+export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
+
+/** cindy 槽·搜索类可申请的动作(web=Cindy 托管的公网搜索)。 */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
+
 /**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
@@ -259,6 +292,22 @@ export interface GhostCindyNeeds {
   image?: GhostModelImageAction[];
   /** 视频类:generate=文生视频,edit=参考图生视频(源图仅限本意识名下媒体,1–2 张首/尾帧)。 */
   video?: GhostModelVideoAction[];
+  /** 媒体类:deposit=寄存自己手里的媒体字节入总仓(换指纹,兼授权 release_media)。 */
+  media?: GhostCindyMediaAction[];
+  /** 文本类:oneshot=快问快答(轻量任务模型链直答一次,无 agent 无工具)。 */
+  text?: GhostCindyTextAction[];
+  /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
+  embed?: GhostCindyEmbedAction[];
+  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由,插件不经手网关凭证)。 */
+  search?: GhostCindySearchAction[];
+  /**
+   * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
+   * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
+   * 未声明处理;用户在详情页的钉档永远优先于本声明。注意:旧宿主会把含本
+   * 字段的身份卡**整份拒装**(cindy 详单未知类目硬拒)——声明前确认目标
+   * 用户群的主机版本。
+   */
+  oneshotModel?: string;
 }
 
 /**
@@ -745,6 +794,11 @@ export interface GhostManifest {
   name: string;
   /** 版本字符串(不强制 semver,仅展示用)。 */
   version: string;
+  /**
+   * 安装此 Release 所需的最低 Cindy 客户端版本。缺省表示不限制客户端版本；
+   * 声明时必须是合法 SemVer，客户端与 Plugin Server 使用同一比较语义。
+   */
+  minCindyVersion?: string;
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
@@ -903,6 +957,88 @@ export function isSafeGhostRelativePath(p: unknown): p is string {
 export type ManifestValidation =
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string };
 
+interface ParsedCindyVersion {
+  core: readonly [string, string, string];
+  prerelease: readonly { numeric: boolean; value: string }[];
+}
+
+function compareNumericIdentifiers(left: string, right: string): -1 | 0 | 1 {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function parseCindyVersion(value: string): ParsedCindyVersion | null {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      value,
+    );
+  if (!match) return null;
+  const core = [match[1], match[2], match[3]] as [string, string, string];
+  const prerelease: Array<{ numeric: boolean; value: string }> = [];
+  for (const part of match[4]?.split('.') ?? []) {
+    const numeric = /^\d+$/.test(part);
+    if (numeric && !/^(0|[1-9]\d*)$/.test(part)) return null;
+    prerelease.push({ numeric, value: part });
+  }
+  return { core, prerelease };
+}
+
+/** 判断值是否是可参与兼容性比较的 Cindy SemVer。 */
+export function isValidCindyVersion(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 32 && parseCindyVersion(value) !== null;
+}
+
+/** 开发构建没有正式版本号，按当前源码兼容处理。 */
+export function isVersionlessCindyVersion(value: string): boolean {
+  return value === '0.0.0' || value.startsWith('0.0.0-');
+}
+
+/** 按 SemVer 2.0.0 比较两个 Cindy 版本；任一格式非法时返回 null。 */
+export function compareCindyVersions(leftValue: string, rightValue: string): -1 | 0 | 1 | null {
+  const left = parseCindyVersion(leftValue);
+  const right = parseCindyVersion(rightValue);
+  if (!left || !right) return null;
+  for (let index = 0; index < 3; index += 1) {
+    const coreComparison = compareNumericIdentifiers(left.core[index], right.core[index]);
+    if (coreComparison !== 0) return coreComparison;
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length === 0 ? 1 : -1;
+  }
+  const length = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left.prerelease[index];
+    const rightPart = right.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart.numeric !== rightPart.numeric) return leftPart.numeric ? -1 : 1;
+    const partComparison = leftPart.numeric
+      ? compareNumericIdentifiers(leftPart.value, rightPart.value)
+      : leftPart.value === rightPart.value
+        ? 0
+        : leftPart.value < rightPart.value
+          ? -1
+          : 1;
+    if (partComparison !== 0) return partComparison;
+  }
+  return 0;
+}
+
+/** 缺少最低版本即不限制；非法当前版本按不兼容处理。 */
+export function supportsCindyVersion(
+  currentVersion: string,
+  minCindyVersion: string | undefined,
+): boolean {
+  if (minCindyVersion === undefined) return true;
+  if (!isValidCindyVersion(currentVersion) || !isValidCindyVersion(minCindyVersion)) return false;
+  if (isVersionlessCindyVersion(currentVersion)) return true;
+  const comparison = compareCindyVersions(currentVersion, minCindyVersion);
+  return comparison !== null && comparison >= 0;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -937,6 +1073,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     raw.version.length > 32
   ) {
     return { ok: false, reason: 'version 必须是 1–32 字符的非空字符串' };
+  }
+  if (
+    raw.minCindyVersion !== undefined &&
+    (typeof raw.minCindyVersion !== 'string' || !isValidCindyVersion(raw.minCindyVersion))
+  ) {
+    return { ok: false, reason: 'minCindyVersion 必须是合法的 SemVer 字符串' };
   }
   // kind 可省略(2026-07-12 晚定案:单形态后字段纯冗余,缺省即 chip);
   // 写了就必须是 chip——写错值仍拒,不静默纠正(规则 9)。
@@ -1045,17 +1187,23 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     raw.description !== undefined &&
     (typeof raw.description !== 'string' ||
       raw.description.trim().length === 0 ||
-      raw.description.length > 300)
+      raw.description.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'description 必须是 1–300 字符的非空字符串' };
+    return {
+      ok: false,
+      reason: `description 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (
     raw.whenToUse !== undefined &&
     (typeof raw.whenToUse !== 'string' ||
       raw.whenToUse.trim().length === 0 ||
-      raw.whenToUse.length > 300)
+      raw.whenToUse.length > GHOST_MANIFEST_SUMMARY_MAX_CHARS)
   ) {
-    return { ok: false, reason: 'whenToUse 必须是 1–300 字符的非空字符串' };
+    return {
+      ok: false,
+      reason: `whenToUse 必须是 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符的非空字符串`,
+    };
   }
   if (raw.icon !== undefined) {
     if (!isSafeGhostRelativePath(raw.icon)) {
@@ -1272,13 +1420,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"' };
     }
     cindy = {};
-    // 类目 → 合法动作表(image / video 两类;动作集恰好同名,但按
-    // 类目查表,未来某类目动作分叉时这里天然承接)。
+    // 类目 → 合法动作表(image / video / media / text / embed / search;动作集恰好
+    // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
       image: GHOST_MODEL_IMAGE_ACTIONS,
       video: GHOST_MODEL_VIDEO_ACTIONS,
+      media: GHOST_CINDY_MEDIA_ACTIONS,
+      text: GHOST_CINDY_TEXT_ACTIONS,
+      embed: GHOST_CINDY_EMBED_ACTIONS,
+      search: GHOST_CINDY_SEARCH_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
+      if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
       const allowed = actionTable[category];
       if (!allowed) {
         return {
@@ -1303,10 +1456,53 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         actions.push(a);
       }
       if (category === 'image') cindy.image = actions as GhostModelImageAction[];
-      else cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
+      else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
+      else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
+      else if (category === 'embed') cindy.embed = actions as GhostCindyEmbedAction[];
+      else if (category === 'search') cindy.search = actions as GhostCindySearchAction[];
+      else
+        return {
+          ok: false,
+          reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(协议缺陷)`,
+        };
     }
-    if (cindy.image === undefined && cindy.video === undefined) {
+    if (
+      cindy.image === undefined &&
+      cindy.video === undefined &&
+      cindy.media === undefined &&
+      cindy.text === undefined &&
+      cindy.embed === undefined &&
+      cindy.search === undefined
+    ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
+    }
+    // oneshotModel(快问快答偏好模型)是标量意图键,不是类目:先摘出,不进类目循环。
+    const oneshotModelRaw = cindyRaw.oneshotModel;
+    if (oneshotModelRaw !== undefined) {
+      if (
+        typeof oneshotModelRaw !== 'string' ||
+        oneshotModelRaw.trim().length === 0 ||
+        oneshotModelRaw.length > 128
+      ) {
+        return {
+          ok: false,
+          reason: 'cindy.oneshotModel 必须是 1–128 字符的目录模型 id(如 "codex/gpt-5.5")',
+        };
+      }
+      if (!cindy.text?.includes('oneshot')) {
+        return {
+          ok: false,
+          reason: 'cindy.oneshotModel 必须与 text 含 "oneshot" 成对声明(它是快问快答的偏好模型)',
+        };
+      }
+      cindy.oneshotModel = oneshotModelRaw.trim();
+    }
+    if (cindy.search?.includes('web') && (!slots.includes('tool') || tools === undefined)) {
+      return {
+        ok: false,
+        reason: 'cindy.search.web 只允许由真实 tool-call 触发，必须同时声明 "tool" 槽和 tools',
+      };
     }
   }
 
@@ -2762,6 +2958,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       id: raw.id,
       name: raw.name,
       version: raw.version,
+      ...(raw.minCindyVersion !== undefined
+        ? { minCindyVersion: raw.minCindyVersion as string }
+        : {}),
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
       ...(locales !== undefined ? { locales } : {}),

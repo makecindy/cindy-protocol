@@ -63,6 +63,34 @@ const manifest: GhostManifest = result.manifest;
 可以发布 49–256 条 scope 的包；仍使用旧协议校验器的 Desktop 会拒绝安装这些包
 并保留现有安装，因此应先升级客户端，再分发超过 48 条 scope 的 Plugin。
 
+### Cindy 托管网页搜索
+
+插件可通过 `cindy.search: ["web"]` 请求 Host 提供 Cindy 托管的公网搜索：
+
+```json
+{
+  "slots": ["tool", "cindy"],
+  "tools": [
+    {
+      "name": "search_web",
+      "description": "Search the public web"
+    }
+  ],
+  "cindy": {
+    "search": ["web"]
+  }
+}
+```
+
+- `search` 当前只接受动作 `web`，未知、空或重复动作均拒绝。
+- `cindy.search.web` 只能由真实 tool-call 触发，因此 manifest 必须同时声明
+  `tool` 槽和至少一个工具；只声明 Cindy 能力但没有工具入口会被拒绝。
+- Host 负责路由、凭证与计费，插件不声明或接触网关 Key、模型名和搜索工具定义。
+
+这是 schema v2 的新增严格能力类目。旧版 plugin-server 和 Desktop 会拒绝包含
+`cindy.search` 的包，因此必须先合并本协议、升级两个消费方并部署，再发布使用
+该能力的插件。插件 Release 应配合 `minCindyVersion`，避免旧客户端收到不兼容版本。
+
 ### Manifest 本地化资源
 
 Plugin 可通过可选的 `locales` 字段声明宿主支持语言对应的包内 JSON 资源：
@@ -282,18 +310,28 @@ try {
 
 ## 字段语义
 
-| 字段                  | 语义                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------ |
-| `Plugin.id`           | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。           |
-| `ghostId`             | `ghost.json.id`；在同一 owner 内唯一，不同 Public、Organization、Personal owner 间允许相同。           |
-| `scope`               | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。 |
-| `organizationId`      | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                       |
-| `defaultInstall`      | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                 |
-| `currentRelease`      | 服务端当前发布的唯一 Release；普通客户端看不到历史 Release。列表只含摘要，详情额外包含 manifest。      |
-| `currentRelease.icon` | 当前 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。              |
-| `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                     |
+| 字段                  | 语义                                                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Plugin.id`           | plugin-server 生成的永久资源 ID；用于详情、下载、分页和本地 managed marker，不等于包内名称。                                              |
+| `ghostId`             | `ghost.json.id`；在同一 owner 内唯一，不同 Public、Organization、Personal owner 间允许相同。                                              |
+| `scope`               | `public` 对任意已登录 Cindy 身份可用；`organization` 只对对应组织可用；`personal` 只对发布者本人可用。                                    |
+| `organizationId`      | Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。                                                                          |
+| `defaultInstall`      | 对当前请求身份计算后的有效默认安装值；表示未安装时自动安装，不表示强制安装或强制启用。                                                    |
+| `minCindyVersion`     | Release 可选的最低 Cindy 版本；必须是合法 SemVer，缺失表示兼容所有 Cindy 版本。                                                           |
+| `X-Cindy-Version`     | 客户端请求列表、详情和下载时携带的 Cindy SemVer；共享常量为 `CINDY_CLIENT_VERSION_HEADER`，HTTP 头名称大小写不敏感。                      |
+| `currentRelease`      | 服务端为当前客户端选择的 Release；优先服务端 current，不兼容时回退到最新且仍有效的历史兼容 Release。列表只含摘要，详情额外包含 manifest。 |
+| `currentRelease.icon` | 所选兼容 Release 的可直接展示图标元数据；为 `null` 时使用客户端兜底图标，URL 为短期授权地址。                                             |
+| `nextCursor`          | 下一页游标；为本页最后一个 `Plugin.id` 或 `null`。                                                                                        |
 
 `parseGetPluginResponse` 还会校验 `ghostId === manifest.id`、Release `version === manifest.version`、顶层 `name/description/author` 与当前 manifest 一致，以及声明 `oidc-token` 的 manifest 只能属于 `organization` scope。调用方不能用 `ghostId` 合并不同来源的记录，应以 `Plugin.id` 标识服务端管理的安装实例。
+
+### Cindy 版本兼容
+
+- `supportsCindyVersion` 是 Desktop、Plugin Server 和 Forge 的统一比较语义：`minCindyVersion` 缺失时恒兼容；声明后按 SemVer 比较，当前 Cindy 版本必须大于或等于最低版本。
+- `0.0.0` 和 `0.0.0-*` 表示没有正式版本号的开发构建，按当前源码兼容处理。其他非法版本不能参与比较。
+- 老客户端缺少 `X-Cindy-Version`，或请求头不是合法 SemVer 时，服务端把客户端版本视为未知：仍可交付没有 `minCindyVersion` 的旧 Release，不得交付声明了最低版本的 Release。
+- 服务端先选择兼容的 current Release；不兼容时，只能从已批准、曾发布并上架且未撤销的历史 Release 中按内部创建顺序回退到最新兼容项。没有兼容 Release 时，列表不下发该 Plugin，详情和下载返回 404。
+- 列表、详情和下载必须使用同一客户端版本选择同一个 Release。Desktop 下载真实 `.cindy` 包后还要用同一函数复核包内 manifest，不能安装不兼容的包。
 
 ## 版本
 
@@ -307,15 +345,15 @@ try {
 
 ## 兼容行为
 
-plugin-server 上传 Release 时使用本包校验 `ghost.json`，不支持的 manifest 不得发布。客户端使用本包解析列表、详情和短期下载凭证；下载响应本身不重复 envelope 版本，客户端只会在成功解析本轮列表/详情后请求它。
+plugin-server 上传 Release 时使用本包校验 `ghost.json`，不支持的 manifest 不得发布。客户端使用本包解析列表、详情和短期下载凭证；下载响应本身不重复 envelope 版本，客户端只会在成功解析本轮列表/详情后请求它。下载只进入 staging，Desktop 必须以真实包内 manifest 再次判断兼容性。
 
-未来 Desktop 接入远程 Plugin 后，下载只进入 staging。客户端不支持 manifest 版本时：
+客户端不支持 manifest 版本或真实包的 `minCindyVersion` 时：
 
 - 首次安装失败并提示当前 Cindy 版本不兼容；
 - 更新失败时丢弃 staging，继续保留本地旧 Release；
 - 不执行 final switch，也不更新本地 managed marker。
 
-HTTP envelope 版本不支持时，客户端停止本轮远程对账并保留本地状态。本期不提供按客户端版本选择 Release、多 current Release、capability 上报或其他协商机制。
+HTTP envelope 版本不支持时，客户端停止本轮远程对账并保留本地状态。本期不提供多 current Release、capability 上报或其他协商机制。
 
 ## 消费顺序
 
